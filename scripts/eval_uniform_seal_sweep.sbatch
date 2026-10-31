@@ -30,11 +30,13 @@ cd "$PROJ_ROOT"
 SHARDS=8
 SHARD="${SLURM_ARRAY_TASK_ID:-0}"
 REPEATS="${REPEATS:-1}"          # SEAL executions per point (median); 2 to match run_benchmarks*.py
-MODEL="$PROJ_ROOT/RL/fhe_rl/trained_models/unified_noise_uniform.zip"
+MODEL="${UNIFIED_UNIFORM_MODEL:-$PROJ_ROOT/RL/fhe_rl/trained_models/unified_noise_uniform.zip}"
+export UNIFIED_UNIFORM_MODEL="$MODEL"
+echo "Model: $MODEL   Results: ${UNIFIED_MORL_OUT_DIR:-results/unified_morl}"
 [ -f "$MODEL" ] || { echo "[FAIL] model not found: $MODEL"; exit 1; }
 
 # each shard needs its own build dir: benchmarks write ../expression.txt next to themselves
-BUILD="build_shard${SHARD}"
+BUILD="build_shard${SHARD}${E3_TAG:+_$E3_TAG}"   # separate per evaluation, so two sweeps can run at once
 [ -d "$BUILD" ] || cp -r build "$BUILD"
 
 python -u scripts/unified_morl_experiments.py sweep \

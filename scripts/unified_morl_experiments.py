@@ -53,7 +53,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 RL_DIR = REPO / "RL"
 MODELS_DIR = RL_DIR / "fhe_rl" / "trained_models"
-OUT_DIR = REPO / "results" / "unified_morl"
+# Overridable so a checkpoint evaluation never mixes (or resumes) with the final-model results
+OUT_DIR = Path(os.environ.get("UNIFIED_MORL_OUT_DIR", str(REPO / "results" / "unified_morl"))).resolve()
 
 # ════════════════════════════════════════════════════════════════════════════
 # Configuration (mirrors the MORL thesis, Table 5.1 and the evaluation protocol)
@@ -120,6 +121,10 @@ AGENTS = {
     "original":  Agent("original", "baseline", model=None, budgets=["none"],
                        note="original CHEHAB single-objective RL, rotation heuristic off"),
 }
+
+# e.g. evaluate a training checkpoint instead of the final model
+if os.environ.get("UNIFIED_UNIFORM_MODEL"):
+    AGENTS["uniform"].model = os.environ["UNIFIED_UNIFORM_MODEL"]
 
 # experiment -> list of (agent, preferences, bisection?)
 EXPERIMENTS = {
