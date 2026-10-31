@@ -44,6 +44,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from .config import get_env_class, get_policy_class
+from pytrs import NoiseEstimator
 from .memory import MemoryEstimator
 from .morl.bisection import build_coarse_grid, bisect_interval, DEFAULT_MAX_BISECT_DEPTH
 from .morl.display import display_pareto_table
@@ -174,7 +175,7 @@ def run_unified_bisection(
     ))])
     sys.modules["fhe_rl_new"] = importlib.import_module("fhe_rl")
     model = PPO(policy=get_policy_class(), env=env).load(model_path)
-    noise_estimator = MemoryEstimator()
+    noise_estimator = NoiseEstimator() if constraint_metric == "noise" else MemoryEstimator()
     eu_prefs = generate_pref_list(11)
 
     if output_file is None:

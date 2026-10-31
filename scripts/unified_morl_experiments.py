@@ -128,6 +128,8 @@ EXPERIMENTS = {
     "B4":  [("base", B4_PREFS, False), ("kl", B4_PREFS, False), ("env", B4_PREFS, False)],
     "B5":  [("base", PREFS, False), ("nbudget10", PREFS, False)],
     "A3":  [("base", PREFS, False), ("uniform", PREFS, False), ("cycle2", PREFS, False)],
+    # Experiment 3: uniform-preference agent alone, 10 preferences x 4 budgets, grid + bisection
+    "E3":  [("uniform", PREFS, True)],
 }
 
 CSV_FIELDS = [
@@ -137,7 +139,10 @@ CSV_FIELDS = [
     "circuit_execution_time_s", "galois_keys_generation_time_s", "total_execution_time_s",
     "rotation_keys_size_mb", "peak_ram_mb", "remaining_noise_budget", "measured_used_bits",
     "final_exec_cost", "final_keys_cost", "est_noise", "est_violated", "measured_violated",
-    "rollback_used", "agent_est_noise", "status", "error",
+    "rollback_used", "agent_est_noise",
+    "initial_exec_cost", "initial_keys_cost", "initial_est_noise",
+    "agent_exec_cost", "agent_keys_cost", "agent_violated",
+    "status", "error",
 ]
 OPS = ["add", "sub", "multiply_plain", "rotate_rows", "negate", "multiply"]
 
@@ -323,7 +328,11 @@ def measure_point(agent: Agent, inst: Instance, w_ops: float, budget, build_dir:
                    final_keys_cost=info.get("final_keys_cost", row.get("final_keys_cost")),
                    est_noise=info.get("final_constraint"), est_violated=info.get("final_violated"),
                    agent_est_noise=info.get("agent_constraint"), rollback_used=info.get("rollback_used"),
-                   rl_inference_s=info.get("inference_time_s"), rl_steps=info.get("steps"))
+                   rl_inference_s=info.get("inference_time_s"), rl_steps=info.get("steps"),
+                   initial_exec_cost=info.get("initial_exec_cost"), initial_keys_cost=info.get("initial_keys_cost"),
+                   initial_est_noise=info.get("initial_constraint"),
+                   agent_exec_cost=info.get("agent_exec_cost"), agent_keys_cost=info.get("agent_keys_cost"),
+                   agent_violated=info.get("agent_violated"))
     if res.returncode != 0:
         row.update(status="compile_failed", error=(res.stderr or out)[-300:].replace("\n", " "))
         return row

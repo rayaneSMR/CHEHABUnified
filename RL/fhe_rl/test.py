@@ -2,7 +2,7 @@ from stable_baselines3 import PPO
 import sys, importlib, time, os, subprocess, tempfile
 from pathlib import Path
 from .utils import load_expressions, load_expressions_named, create_rules
-from pytrs import parse_sexpr
+from pytrs import parse_sexpr, NoiseEstimator
 from pytrs.cost import split_cost_mo
 from .memory import MemoryEstimator, extra_metrics
 from .config import get_env_class, get_policy_class, get_framework
@@ -337,7 +337,11 @@ def _run_single_episode(
     if constraint_metric == "noise" and bfv_noise_bound_verifier is not None:
         best = None
         for checkpoint in sorted(valid_checkpoints, key=lambda cp: cp["cost"]):
-            candidate_certificate = bfv_noise_bound_verifier.BFV_noise_bound(checkpoint["expression"])
+            try:
+                candidate_certificate = bfv_noise_bound_verifier.BFV_noise_bound(checkpoint["expression"])
+            except BFVNoiseBoundError as error:   # CLI failure on one checkpoint: try the next one
+                print(f"  [BFV] certificate failed on step {checkpoint['step']}: {error}", flush=True)
+                continue
             if candidate_certificate.decryptable and candidate_certificate.remaining_noise_budget_bits > 0:
                 best = checkpoint
                 certificate = candidate_certificate
@@ -355,9 +359,16 @@ def _run_single_episode(
         safety_activated = (best["step"] != agent_final["step"])
     else:
         if constraint_metric == "noise" and bfv_noise_bound_verifier is not None:
-            initial_certificate = bfv_noise_bound_verifier.BFV_noise_bound(test_expr)
-            if not initial_certificate.decryptable or initial_certificate.remaining_noise_budget_bits <= 0:
-                raise BFVNoiseBoundError("no rollback checkpoint has a positive certified BFV remaining noise budget")
+            try:
+                initial_certificate = bfv_noise_bound_verifier.BFV_noise_bound(test_expr)
+            except BFVNoiseBoundError as error:
+                print(f"  [BFV] certificate failed on the input expression: {error}", flush=True)
+                initial_certificate = None
+            if initial_certificate is not None and (not initial_certificate.decryptable or initial_certificate.remaining_noise_budget_bits <= 0):
+                # Record it instead of aborting the whole evaluation: the row keeps the initial
+                # expression and its (non-positive) certified budget, so it is visible in the results.
+                print(f"  [BFV] no checkpoint (not even the input) is certified decryptable: "
+                      f"remaining={initial_certificate.remaining_noise_budget_bits} bits", flush=True)
             certificate = initial_certificate
         safe_expr = test_expr
         safe_cost = initial_cost
@@ -446,7 +457,9 @@ def test_agent_v2(
     EnvCls = get_env_class()
     PolicyCls = get_policy_class()
     sys.modules["fhe_rl_new"] = importlib.import_module("fhe_rl")
-    noise_estimator = MemoryEstimator()
+    # Initial / fallback constraint values must use the metric's own estimator
+    # (MemoryEstimator returns RAM in MB, which is wrong against noise budgets in bits).
+    noise_estimator = NoiseEstimator() if constraint_metric == "noise" else MemoryEstimator()
     if constraint_metric == "noise" and bfv_noise_bound_verifier is None:
         bfv_noise_bound_verifier = BFVNoiseBoundVerifier.from_environment()
 
