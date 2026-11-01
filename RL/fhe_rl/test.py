@@ -331,23 +331,41 @@ def _run_single_episode(
     rl_time_ms = (time.perf_counter() - t0) * 1000
     agent_final = checkpoints[-1]
 
-    # Safety rollback: pick best valid checkpoint (lowest cost among valid)
+    # Safety rollback: pick the best checkpoint within budget.
+    #   With a preference w (MORL / unified): lowest w_ops*ops/ops0 + w_keys*keys/max(keys0, 1),
+    #   so the rollback keeps the trade-off asked for (at w=[1,0] this is the lowest ops cost).
+    #   Without a preference (constrained): lowest cost, as before.
     valid_checkpoints = [cp for cp in checkpoints if cp["noise"] <= budget]
+    if preference_vector is not None:
+        ops0, keys0 = _get_split_costs(test_expr)
+        def _score(cp):
+            ops, keys = _get_split_costs(cp["expression"])
+            return (preference_vector[0] * (ops / ops0 if ops0 else ops)
+                    + preference_vector[1] * keys / max(keys0, 1))
+    else:
+        def _score(cp):
+            return cp["cost"]
+
+    def _certify(expression, context):
+        """SEAL certificate, or None when the CLI fails on this expression."""
+        try:
+            return bfv_noise_bound_verifier.BFV_noise_bound(expression)
+        except BFVNoiseBoundError as error:
+            print(f"  [BFV] certificate failed for {context}: {error}", flush=True)
+            return None
+
     certificate = None
     if constraint_metric == "noise" and bfv_noise_bound_verifier is not None:
         best = None
-        for checkpoint in sorted(valid_checkpoints, key=lambda cp: cp["cost"]):
-            try:
-                candidate_certificate = bfv_noise_bound_verifier.BFV_noise_bound(checkpoint["expression"])
-            except BFVNoiseBoundError as error:   # CLI failure on one checkpoint: try the next one
-                print(f"  [BFV] certificate failed on step {checkpoint['step']}: {error}", flush=True)
-                continue
-            if candidate_certificate.decryptable and candidate_certificate.remaining_noise_budget_bits > 0:
+        for checkpoint in sorted(valid_checkpoints, key=_score):
+            candidate_certificate = _certify(checkpoint["expression"], f"step {checkpoint['step']}")
+            if (candidate_certificate is not None and candidate_certificate.decryptable
+                    and candidate_certificate.remaining_noise_budget_bits > 0):
                 best = checkpoint
                 certificate = candidate_certificate
                 break
     elif valid_checkpoints:
-        best = min(valid_checkpoints, key=lambda cp: cp["cost"])
+        best = min(valid_checkpoints, key=_score)
     else:
         best = None
 
@@ -359,17 +377,13 @@ def _run_single_episode(
         safety_activated = (best["step"] != agent_final["step"])
     else:
         if constraint_metric == "noise" and bfv_noise_bound_verifier is not None:
-            try:
-                initial_certificate = bfv_noise_bound_verifier.BFV_noise_bound(test_expr)
-            except BFVNoiseBoundError as error:
-                print(f"  [BFV] certificate failed on the input expression: {error}", flush=True)
-                initial_certificate = None
-            if initial_certificate is not None and (not initial_certificate.decryptable or initial_certificate.remaining_noise_budget_bits <= 0):
-                # Record it instead of aborting the whole evaluation: the row keeps the initial
-                # expression and its (non-positive) certified budget, so it is visible in the results.
-                print(f"  [BFV] no checkpoint (not even the input) is certified decryptable: "
-                      f"remaining={initial_certificate.remaining_noise_budget_bits} bits", flush=True)
-            certificate = initial_certificate
+            # Fall back to the input expression; record (not raise) when even it is not certified.
+            initial_certificate = _certify(test_expr, "the input expression")
+            if (initial_certificate is not None and initial_certificate.decryptable
+                    and initial_certificate.remaining_noise_budget_bits > 0):
+                certificate = initial_certificate
+            else:
+                print("    [BFV] no checkpoint (not even the input) has a positive certified budget", flush=True)
         safe_expr = test_expr
         safe_cost = initial_cost
         safe_noise = initial_noise
@@ -390,7 +404,55 @@ def _run_single_episode(
         "elapsed_ms": rl_time_ms,
         "checkpoints": checkpoints,
         "certificate": certificate,
+        "certified": certificate is not None,
     }
+
+
+def _front_metrics(df, pref_list):
+    """IC / HV / SP / EU per (budget, expression) for the safe and the raw agent results.
+
+    Safe front: rollback-picked expressions within budget. Agent front: final
+    expressions before rollback, within budget. Returns (per-expression rows,
+    per-budget averages).
+    """
+    from .unified_bisection import _hypervolume, _sparsity, _expected_utility
+    from .morl.pareto_frontier import get_pareto_frontier
+
+    prefs = [w for w in pref_list if w is not None]
+    rows = []
+    for (budget, name), g in df.groupby(["Budget", "Expression Name"], sort=False):
+        ops0 = float(g["Initial Ops"].iloc[0])
+        keys0 = float(g["Initial Keys"].iloc[0])
+        row = {"Budget": budget, "Expression": name, "Initial Ops": ops0, "Initial Keys": keys0,
+               "Preferences": len(g)}
+        for tag, ops_col, keys_col, viol_col in (
+            ("Safe", "Safe Final Ops", "Safe Final Keys", "Safe Violated"),
+            ("Agent", "Agent Final Ops", "Agent Final Keys", "Agent Violated"),
+        ):
+            ok = g[~g[viol_col].astype(bool)]
+            points = [{"final_exec_cost": float(o), "final_keys_cost": float(k)}
+                      for o, k in zip(ok[ops_col], ok[keys_col])]
+            front = get_pareto_frontier(points)
+            pts = [(p["final_exec_cost"] / ops0 if ops0 else p["final_exec_cost"],
+                    p["final_keys_cost"] / max(keys0, 1)) for p in front]
+            row[f"{tag} Feasible Points"] = len(points)
+            row[f"{tag} IC"] = len(front)
+            row[f"{tag} HV"] = round(_hypervolume(pts), 6) if pts else None
+            row[f"{tag} SP"] = round(_sparsity(pts), 6) if pts else None
+            row[f"{tag} EU"] = round(_expected_utility(pts, prefs), 6) if pts and prefs else None
+            row[f"{tag} Distinct Key Counts"] = len({p["final_keys_cost"] for p in points})
+        rows.append(row)
+
+    summary = []
+    if rows:
+        fdf = pd.DataFrame(rows)
+        for budget, g in fdf.groupby("Budget", sort=True):
+            s = {"Budget": budget, "Expressions": len(g)}
+            for c in fdf.columns:
+                if c.startswith(("Safe ", "Agent ")):
+                    s[f"Avg {c}"] = round(pd.to_numeric(g[c], errors="coerce").mean(), 4)
+            summary.append(s)
+    return rows, summary
 
 
 def test_agent_v2(
@@ -432,9 +494,14 @@ def test_agent_v2(
     cname, cunit = ("Noise", "bits") if constraint_metric == "noise" else ("RAM", "MB")
 
     def _labels(frame):
-        return frame.rename(columns=lambda c: c.replace("RAM Headroom (MB)", f"{cname} Headroom ({cunit})")
-                                               .replace("RAM Increase (MB)", f"{cname} Increase ({cunit})")
-                                               .replace("RAM (MB)", f"{cname} ({cunit})"))
+        out = frame.rename(columns=lambda c: c.replace("RAM Headroom (MB)", f"{cname} Headroom ({cunit})")
+                                              .replace("RAM Increase (MB)", f"{cname} Increase ({cunit})")
+                                              .replace("RAM Expansion (%)", f"{cname} Expansion (%)")
+                                              .replace("RAM (MB)", f"{cname} ({cunit})"))
+        if constraint_metric == "noise":
+            for col in [c for c in out.columns if c.endswith("Feasibility")]:
+                out[col] = out[col].replace("VIOLATED (OOM)", "VIOLATED")
+        return out
     expressions_file = _resolve_expressions(expressions_file)
     named_pairs = load_expressions_named(expressions_file)
     expr_names = [name for _, name in named_pairs]
@@ -457,8 +524,7 @@ def test_agent_v2(
     EnvCls = get_env_class()
     PolicyCls = get_policy_class()
     sys.modules["fhe_rl_new"] = importlib.import_module("fhe_rl")
-    # Initial / fallback constraint values must use the metric's own estimator
-    # (MemoryEstimator returns RAM in MB, which is wrong against noise budgets in bits).
+    # Same estimator as the environment: noise bits for "noise", peak RAM (MB) for "mem"
     noise_estimator = NoiseEstimator() if constraint_metric == "noise" else MemoryEstimator()
     if constraint_metric == "noise" and bfv_noise_bound_verifier is None:
         bfv_noise_bound_verifier = BFVNoiseBoundVerifier.from_environment()
@@ -623,6 +689,7 @@ def test_agent_v2(
                     "BFV Bound Remaining Budget (bits)": (
                         certificate.remaining_noise_budget_bits if certificate is not None else None
                     ),
+                    "BFV Certified": (res2["certified"] if constraint_metric == "noise" else None),
                     "_stage1_expr": stage1_safe_expr,
                     "_safe_expr": final_safe_expr,
                     **extra_metrics(test_expr, agent_final["expression"], initial_noise, agent_final["noise"], budget),
@@ -688,6 +755,7 @@ def test_agent_v2(
                     "BFV Bound Remaining Budget (bits)": (
                         certificate.remaining_noise_budget_bits if certificate is not None else None
                     ),
+                    "BFV Certified": (res["certified"] if constraint_metric == "noise" else None),
                     "Trajectory Costs": "|".join(str(cp["cost"]) for cp in res["checkpoints"]),
                     "Trajectory RAM (MB)": "|".join(f'{cp["noise"]:.2f}' for cp in res["checkpoints"]),
                     "_safe_expr": safe_expr,
@@ -777,9 +845,21 @@ def test_agent_v2(
                         round(pd.to_numeric(g["BFV Bound Remaining Budget (bits)"], errors="coerce").mean(), 2)
                         if g["BFV Bound Remaining Budget (bits)"].notna().any() else None
                     ),
+                    "BFV Certified Rate (%)": (
+                        round(g["BFV Certified"].astype(float).mean() * 100, 1)
+                        if g["BFV Certified"].notna().any() else None
+                    ),
                     "Avg RL Time (s)": round(g["RL Time (ms)"].mean() / 1000.0, 2),
                 })
             _labels(pd.DataFrame(pref_rows)).to_excel(writer, sheet_name="summary_per_pref", index=False)
+
+            # MORL front metrics (same formulas as the bisection experiment), per
+            # (budget, expression) over the evaluated preferences, on costs normalized
+            # by the input expression: o = ops / ops0, k = keys / max(keys0, 1).
+            front_rows, front_summary = _front_metrics(df, pref_list)
+            if front_rows:
+                pd.DataFrame(front_rows).to_excel(writer, sheet_name="front_metrics", index=False)
+                pd.DataFrame(front_summary).to_excel(writer, sheet_name="front_summary", index=False)
 
         # Feasible-only summary (primary metric for paper)
         feasible_rows = []

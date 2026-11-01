@@ -684,18 +684,37 @@ def main(args=None):
             agent_zip = get_model_path("agent_model")
             run_agent_baseline(input_file, embeddings, agent_zip, output_file)
         elif framework_name == "unified":
-            from .run_unified import run_agent_unified
-            train_budgets = (
-                [int(b) for b in parsed_args.train_budgets.split(",")] if parsed_args.train_budgets else None
-            )
-            run_agent_unified(
-                input_file, embeddings, output_file,
-                model=parsed_args.model, w_ops=parsed_args.w_ops, budget=parsed_args.budget,
-                train_budgets=train_budgets, method=parsed_args.method,
-                constraint=parsed_args.constraint,
-                rollback=False if parsed_args.no_rollback else None,
-                info_json=parsed_args.info_json,
-            )
+            if os.environ.get("FHE_RL_MODEL"):
+                # Called by the C++ compiler (real compile + SEAL execution evaluation).
+                # The compiler only passes --w_ops; the rest comes from the environment,
+                # which the compiler's subprocess inherits (see scripts/run_benchmarks_unified.py).
+                from .run import run_agent_unified
+                w_ops = parsed_args.w_ops if parsed_args.w_ops is not None else float(os.environ.get("FHE_RL_W_OPS", "0.5"))
+                w_ops = round(float(w_ops), 6)
+                model_path = os.environ.get("FHE_RL_MODEL") or str(get_model_path("unified_agent_model"))
+                train_budgets = [int(b) for b in os.environ.get("FHE_RL_TRAIN_BUDGETS", "230,236,369,9000000").split(",")]
+                run_agent_unified(
+                    input_file, embeddings, model_path, output_file,
+                    budget=int(os.environ.get("FHE_RL_BUDGET", "9000000")),
+                    train_budgets=train_budgets,
+                    preference=[w_ops, round(1.0 - w_ops, 6)],
+                    constraint_metric=os.environ.get("FHE_RL_CONSTRAINT", "noise"),
+                    constraint_method=os.environ.get("FHE_RL_METHOD", "nato_sc"),
+                    log_file=os.environ.get("FHE_RL_RUN_LOG"),
+                )
+            else:
+                from .run_unified import run_agent_unified
+                train_budgets = (
+                    [int(b) for b in parsed_args.train_budgets.split(",")] if parsed_args.train_budgets else None
+                )
+                run_agent_unified(
+                    input_file, embeddings, output_file,
+                    model=parsed_args.model, w_ops=parsed_args.w_ops, budget=parsed_args.budget,
+                    train_budgets=train_budgets, method=parsed_args.method,
+                    constraint=parsed_args.constraint,
+                    rollback=False if parsed_args.no_rollback else None,
+                    info_json=parsed_args.info_json,
+                )
         elif framework_name == "morl":
             # Reference MORL agent (env_mo / policy_mo), locked to the requested preference.
             from .run_mo import run_agent_mo
