@@ -24,8 +24,12 @@ mkdir -p logs
 MODEL="$(cd "$(dirname "$MODEL")" && pwd)/$(basename "$MODEL")"
 [ -x build/benchmarks/dot_product/dot_product ] || { echo "ERROR: run 'bash scripts/build_e2e_benchmarks.sh' first"; exit 1; }
 
-BENCHES=(box_blur gx_kernel gy_kernel roberts_cross matrix_mul dot_product hamming_dist
-         l2_distance lin_reg poly_reg max sort polynomials_coyote)
+# Quick run: dot_product only. Uncomment the other benchmarks for the full suite.
+BENCHES=(
+    dot_product
+    # box_blur gx_kernel gy_kernel roberts_cross matrix_mul
+    # hamming_dist l2_distance lin_reg poly_reg max sort polynomials_coyote
+)
 
 echo "Model:   $MODEL"
 echo "Budgets: $BUDGETS"
