@@ -667,6 +667,24 @@ def main(args=None):
         if framework_name == "baseline":
             agent_zip = get_model_path("agent_model")
             run_agent_baseline(input_file, embeddings, agent_zip, output_file)
+        elif framework_name == "unified":
+            # Called by the C++ compiler (real compile + SEAL execution evaluation).
+            # The compiler only passes --w_ops; the rest comes from the environment,
+            # which the compiler's subprocess inherits (see scripts/run_benchmarks_unified.py).
+            from .run import run_agent_unified
+            w_ops = parsed_args.w_ops if parsed_args.w_ops is not None else float(os.environ.get("FHE_RL_W_OPS", "0.5"))
+            w_ops = round(float(w_ops), 6)
+            model_path = os.environ.get("FHE_RL_MODEL") or str(get_model_path("unified_agent_model"))
+            train_budgets = [int(b) for b in os.environ.get("FHE_RL_TRAIN_BUDGETS", "230,236,369,9000000").split(",")]
+            run_agent_unified(
+                input_file, embeddings, model_path, output_file,
+                budget=int(os.environ.get("FHE_RL_BUDGET", "9000000")),
+                train_budgets=train_budgets,
+                preference=[w_ops, round(1.0 - w_ops, 6)],
+                constraint_metric=os.environ.get("FHE_RL_CONSTRAINT", "noise"),
+                constraint_method=os.environ.get("FHE_RL_METHOD", "nato_sc"),
+                log_file=os.environ.get("FHE_RL_RUN_LOG"),
+            )
         else:
             agent_zip = get_model_path("agent_model")
             run_agent(input_file, embeddings, agent_zip, output_file, noise_budget=1500)

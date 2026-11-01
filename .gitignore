@@ -40,6 +40,7 @@
 bin/
 lib/
 build/
+e2e_*/
 target/
 *.build
 env
