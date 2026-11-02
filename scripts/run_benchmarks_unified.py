@@ -77,6 +77,11 @@ def prepare_work_dir(work, benches):
             sys.exit(f"Benchmark binary not built: {src / bench}  (run scripts/build_e2e_benchmarks.sh)")
         if not dst.exists():
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns("build", "heongpu", "CMakeFiles"))
+        # Use the io generator from the sources: `make` of a benchmark folder does not refresh
+        # the copy in build/, so it can be outdated (it writes the expected outputs)
+        gen = REPO / "benchmarks" / bench / f"generate_{bench}.py"
+        if gen.is_file():
+            shutil.copy2(gen, dst / gen.name)
     assert (work / "benchmarks" / benches[0] / ".." / ".." / ".." / "RL").resolve() == (REPO / "RL").resolve()
 
 
