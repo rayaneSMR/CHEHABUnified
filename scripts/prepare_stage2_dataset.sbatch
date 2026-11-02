@@ -5,7 +5,7 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 4
-#SBATCH -t 1-00:00:00
+#SBATCH -t 2-00:00:00
 
 # Email notifications
 #SBATCH --mail-user=${USER}@nyu.edu
@@ -77,6 +77,12 @@ python -u -m fhe_rl.preoptimize_dataset \
     --budget-options 230,236,369,9000000 \
     --preference 1.0,0.0 \
     --constraint noise \
-    --method nato_sc
+    --method nato_sc \
+    || { echo "ERROR: pre-optimization failed (see logs/error.prep_stage2_data.${SLURM_JOB_ID:-}.txt)"; exit 1; }
 
-echo "Dataset preparation completed: $OUTPUT_DATASET"
+# Fail the job (so the afterok chain stops) if the dataset was not written
+if [ ! -s "$OUTPUT_DATASET" ]; then
+    echo "ERROR: $OUTPUT_DATASET is missing or empty"
+    exit 1
+fi
+echo "Dataset preparation completed: $OUTPUT_DATASET ($(wc -l < "$OUTPUT_DATASET") expressions)"

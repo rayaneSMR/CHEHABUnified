@@ -17,10 +17,10 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
 
-from .utils import load_expressions_named, load_embeddings_from_config, create_rules
+from .utils import load_expressions, load_embeddings_from_config, create_rules
 from .config import get_env_class, get_policy_class, set_embeddings_model_type, set_framework
 from .memory import MemoryEstimator
-from pytrs import parse_sexpr, calculate_cost
+from pytrs import parse_sexpr, calculate_cost, NoiseEstimator
 
 
 def preoptimize_dataset(
@@ -60,9 +60,9 @@ def preoptimize_dataset(
 
     embeddings, _ = load_embeddings_from_config("dynamic", embedder_type=embedder)
 
-    named_pairs = load_expressions_named(input_file)
-    expr_names = [name for _, name in named_pairs]
-    expressions = [expr for expr, _ in named_pairs]
+    # Same loader (and so the same expressions) as the Stage 1 training run
+    expressions = load_expressions(input_file)
+    expr_names = [None] * len(expressions)
     total_exprs = len(expressions)
     print(f"Loaded {total_exprs} expressions from {input_file}.")
 
@@ -98,66 +98,32 @@ def preoptimize_dataset(
 
     print(f"Loading Stage 1 model from: {model_path}")
     model = PPO(policy=PolicyCls, env=env).load(model_path)
-    noise_estimator = MemoryEstimator()
+    noise_estimator = NoiseEstimator() if constraint_metric == "noise" else MemoryEstimator()
 
     os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
 
     optimized_entries = []
+    skipped = 0
     t_start = time.perf_counter()
 
     for i, (orig_expr, name) in enumerate(zip(expressions, expr_names)):
-        env.set_options({"budget": budget, "expression": orig_expr, "preference_vector": [1.0, 0.0]})
-        obs = env.reset()
-
-        wrapper = env.envs[0]
-        fhe_env = wrapper.env
-        init_cost = fhe_env.initial_cost
-        init_noise = float(getattr(fhe_env, "curr_constraint", None) or noise_estimator.estimate(parse_sexpr(orig_expr)))
-
-        checkpoints = [{
-            "step": 0,
-            "expression": orig_expr,
-            "cost": init_cost,
-            "noise": init_noise,
-        }]
-
-        done = False
-        steps = 0
-        while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, rewards, dones, infos = env.step(action)
-            done = bool(dones[0])
-            steps += 1
-
-            if done:
-                terminal = infos[0]
-                cp_expr = terminal.get("expression", fhe_env.expression)
-                cp_cost = terminal.get("cost", fhe_env.current_cost)
-                cp_noise = float(terminal.get("constraint_value", getattr(fhe_env, "curr_constraint", 0.0)))
-            else:
-                cp_expr = fhe_env.expression
-                cp_cost = fhe_env.current_cost
-                cp_noise = float(getattr(fhe_env, "curr_constraint", None) or noise_estimator.estimate(parse_sexpr(cp_expr)))
-
-            checkpoints.append({
-                "step": steps,
-                "expression": cp_expr,
-                "cost": cp_cost,
-                "noise": cp_noise,
-            })
-
-        # Rollback: lowest cost among valid
-        valid = [cp for cp in checkpoints if cp["noise"] <= budget]
-        best = min(valid, key=lambda cp: cp["cost"]) if valid else checkpoints[0]
-        safe_expr = best["expression"]
-        final_cost = best["cost"]
+        try:
+            entry = _preoptimize_one(env, model, noise_estimator=noise_estimator, orig_expr=orig_expr,
+                                     budget=budget, preference=preference)
+        except Exception as e:
+            skipped += 1
+            print(f"  WARNING: skipping expression {i}: {e}", flush=True)
+            continue
+        safe_expr, init_cost, final_cost = entry
         cost_red = ((init_cost - final_cost) / init_cost * 100) if init_cost > 0 else 0.0
-
         optimized_entries.append((safe_expr, name))
 
         if (i + 1) % 50 == 0 or (i + 1) == total_exprs:
             elapsed = time.perf_counter() - t_start
             print(f"  [{i+1}/{total_exprs}] Pre-optimized in {elapsed:.1f}s | Latest: {init_cost}->{final_cost} ({cost_red:+.1f}%)", flush=True)
+
+    if not optimized_entries:
+        raise RuntimeError("no expression could be pre-optimized")
 
     with open(output_file, "w", encoding="utf-8") as f:
         for expr, name in optimized_entries:
@@ -167,9 +133,58 @@ def preoptimize_dataset(
                 f.write(f"{expr}\n")
 
     print("=" * 60)
-    print(f"Pre-optimization complete! Saved {len(optimized_entries)} expressions to:")
+    print(f"Pre-optimization complete! Saved {len(optimized_entries)} expressions "
+          f"({skipped} skipped) to:")
     print(f"  {output_file}")
     print("=" * 60)
+
+
+def _preoptimize_one(env, model, noise_estimator, orig_expr, budget, preference):
+    """Run the Stage 1 agent on one expression; return (safe_expr, init_cost, safe_cost)."""
+    env.set_options({"budget": budget, "expression": orig_expr, "preference_vector": list(preference)})
+    obs = env.reset()
+
+    wrapper = env.envs[0]
+    fhe_env = wrapper.env
+    init_cost = fhe_env.initial_cost
+    init_noise = float(getattr(fhe_env, "curr_constraint", None) or noise_estimator.estimate(parse_sexpr(orig_expr)))
+
+    checkpoints = [{
+        "step": 0,
+        "expression": orig_expr,
+        "cost": init_cost,
+        "noise": init_noise,
+    }]
+
+    done = False
+    steps = 0
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, rewards, dones, infos = env.step(action)
+        done = bool(dones[0])
+        steps += 1
+
+        if done:
+            terminal = infos[0]
+            cp_expr = terminal.get("expression", fhe_env.expression)
+            cp_cost = terminal.get("cost", fhe_env.current_cost)
+            cp_noise = float(terminal.get("constraint_value", getattr(fhe_env, "curr_constraint", 0.0)))
+        else:
+            cp_expr = fhe_env.expression
+            cp_cost = fhe_env.current_cost
+            cp_noise = float(getattr(fhe_env, "curr_constraint", None) or noise_estimator.estimate(parse_sexpr(cp_expr)))
+
+        checkpoints.append({
+            "step": steps,
+            "expression": cp_expr,
+            "cost": cp_cost,
+            "noise": cp_noise,
+        })
+
+    # Rollback: lowest cost among valid
+    valid = [cp for cp in checkpoints if cp["noise"] <= budget]
+    best = min(valid, key=lambda cp: cp["cost"]) if valid else checkpoints[0]
+    return best["expression"], init_cost, best["cost"]
 
 
 def main():
