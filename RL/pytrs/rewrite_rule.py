@@ -11,6 +11,39 @@ from util import generate_random_assignments, evaluate_expr
 
 MAX_VECTOR_SIZE = 32
 
+ROTATION_RULE_TYPES = ("vectorize-rotation", "vectorize-rotation-flexible")
+
+
+def vector_lengths_consistent(expr: Expr) -> bool:
+    """True if every VecAdd / VecMinus / VecMul combines vectors of the same length.
+
+    Rotation vectorization widens a (Vec ...) from n to 2n lanes. That is fine for the
+    outermost vector, but a widened vector combined with an n-lane one gives a program
+    the compiler packs wrongly (wrong SEAL outputs), so such rewrites are not allowed.
+    """
+    def length(e):
+        if not isinstance(e, Op):
+            return None
+        if e.op == "Vec":
+            for a in e.args:
+                if length(a) == -1:
+                    return -1
+            return len(e.args)
+        if e.op in ("<<", "VecNeg"):
+            return length(e.args[0])
+        if e.op in ("VecAdd", "VecMinus", "VecMul"):
+            lens = [length(a) for a in e.args]
+            if -1 in lens:
+                return -1
+            vec_lens = {n for n in lens if n is not None}
+            return -1 if len(vec_lens) > 1 else (vec_lens.pop() if vec_lens else None)
+        for a in e.args:          # scalar op: its operands must be consistent too
+            if length(a) == -1:
+                return -1
+        return None
+    return length(expr) != -1
+
+
 class RewriteRule:
     """
     A single rewrite rule: when LHS pattern matches, replace by RHS template.
@@ -204,8 +237,9 @@ class RewriteRule:
         else:
             identity_value = 0
         
-        # Decide whether to handle as binary or unary based on which is more common
-        if len(binary_lanes) >= len(unary_lanes):
+        # A unary vector op (VecNeg) can only be built as unary, a binary one (VecAdd,
+        # VecMinus, VecMul) only as binary; every lane must keep its value.
+        if self.vector_op != "VecNeg":
             # Handle as binary operations
             left_vec_elements = []
             right_vec_elements = []
@@ -219,9 +253,13 @@ class RewriteRule:
                     right_vec_elements.append(binary_right_operands[binary_idx])
                     binary_idx += 1
                 elif i in unary_lanes:
-                    # Convert unary to binary with identity
-                    left_vec_elements.append(unary_operands[unary_idx])
-                    right_vec_elements.append(Const(identity_value))
+                    # Convert unary to binary: (- a) = 0 - a; other ops: a OP identity
+                    if target_op == "-":
+                        left_vec_elements.append(Const(0))
+                        right_vec_elements.append(unary_operands[unary_idx])
+                    else:
+                        left_vec_elements.append(unary_operands[unary_idx])
+                        right_vec_elements.append(Const(identity_value))
                     unary_idx += 1
                 else:
                     # Non-vectorizable expression
@@ -250,14 +288,10 @@ class RewriteRule:
                 if i in unary_lanes:
                     operand_vec_elements.append(unary_operands[unary_idx])
                     unary_idx += 1
-                elif i in binary_lanes:
-                    # For binary ops in unary context, we could take first operand
-                    # For now, let's take the first operand
-                    operand_vec_elements.append(binary_left_operands[binary_idx])
-                    binary_idx += 1
                 else:
-                    # Non-vectorizable expression - wrap in target operation
-                    operand_vec_elements.append(expr.args[i])
+                    # Any other lane e (binary (- a b) or non-matching) is stored as (- e),
+                    # so that VecNeg gives back e: -(-e) = e
+                    operand_vec_elements.append(Op("-", [expr.args[i]]))
             
             operand_vec = Op("Vec", operand_vec_elements)
             result = Op(self.vector_op, [operand_vec])
@@ -316,19 +350,28 @@ class RewriteRule:
                     return None
                 operands.append(lane.args[0])
             
-            # Create doubled vector: [operands..., operands...]
-            doubled_vector_elements = operands + operands
-        
-        doubled_vector = Op("Vec", doubled_vector_elements)
-        
-        # Create rotation with shift = original_size
-        shift_amount = Const(original_size)
-        rotated_vector = Op("<<", [doubled_vector, shift_amount])
-        
-        # Create final result
-        result = Op(self.vector_op, [doubled_vector, rotated_vector])
-        
+            # (- a) lanes: [0..., a...] so that lane i = 0 - a_i (duplicating a gave a - a = 0)
+            if self.scalar_op != "-" or self.vector_op == "VecNeg":
+                return None
+            doubled_vector_elements = [Const(0) for _ in operands] + operands
+
+        half = len(doubled_vector_elements) // 2
+        result = self._rotation_result(doubled_vector_elements[:half], doubled_vector_elements[half:])
         return result if result.validate_expression() else None
+
+    def _rotation_result(self, first: List[Expr], second: List[Expr]) -> Expr:
+        """(VecOP D (<< D n)) with D = [first..., second...]: lane i = first_i OP second_i.
+
+        Lanes n..2n-1 then hold second_i OP first_i, equal to lanes 0..n-1 for + and *
+        (the vector repeats, as the compiler fills the slots). For - they would be
+        negated, so subtraction is built as VecAdd with D = [first..., -second...].
+        """
+        vector_op = self.vector_op
+        if vector_op == "VecMinus":
+            second = [s if isinstance(s, Const) and s.value == 0 else Op("-", [s]) for s in second]
+            vector_op = "VecAdd"
+        doubled = Op("Vec", list(first) + list(second))
+        return Op(vector_op, [doubled, Op("<<", [doubled, Const(len(first))])])
 
     def _apply_flexible_rotation_vectorize(self, expr: Expr) -> Optional[Expr]:
         """Apply flexible rotation vectorization - handles both binary and unary operations with correct ordering."""
@@ -400,9 +443,13 @@ class RewriteRule:
                 second_half.append(binary_second_operands[binary_idx])
                 binary_idx += 1
             elif i in unary_lanes:
-                # Unary operation - duplicate the operand
-                first_half.append(unary_operands[unary_idx])
-                second_half.append(unary_operands[unary_idx])
+                # Unary operation: (- a) = 0 - a (duplicating a gave a - a = 0)
+                if target_op == "-":
+                    first_half.append(Const(0))
+                    second_half.append(unary_operands[unary_idx])
+                else:
+                    first_half.append(unary_operands[unary_idx])
+                    second_half.append(Const(identity_value))
                 unary_idx += 1
             else:
                 # Non-matching expression
@@ -416,16 +463,7 @@ class RewriteRule:
                     first_half.append(expr.args[i])
                     second_half.append(Const(identity_value))
         
-        # Create doubled vector: [first_half..., second_half...]
-        doubled_vector_elements = first_half + second_half
-        doubled_vector = Op("Vec", doubled_vector_elements)
-        
-        # Create rotation with shift = original_size
-        shift_amount = Const(original_size)
-        rotated_vector = Op("<<", [doubled_vector, shift_amount])
-        
-        # Create final result
-        result = Op(self.vector_op, [doubled_vector, rotated_vector])
+        result = self._rotation_result(first_half, second_half)
         
         return result if result.validate_expression() else None
 
@@ -475,10 +513,12 @@ class RewriteRule:
                     if self._apply_flexible_vectorize(current) is not None:
                         matches.append((path.copy(), current))
                 elif self.rule_type == "vectorize-rotation":
-                    if self._apply_rotation_vectorize(current) is not None:
+                    if (self._apply_rotation_vectorize(current) is not None
+                            and vector_lengths_consistent(self._apply_via_path(expr, path))):
                         matches.append((path.copy(), current))
                 elif self.rule_type == "vectorize-rotation-flexible":
-                    if self._apply_flexible_rotation_vectorize(current) is not None:
+                    if (self._apply_flexible_rotation_vectorize(current) is not None
+                            and vector_lengths_consistent(self._apply_via_path(expr, path))):
                         matches.append((path.copy(), current))
             
             if isinstance(current, Op):
