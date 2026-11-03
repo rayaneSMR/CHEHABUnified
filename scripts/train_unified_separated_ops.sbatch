@@ -57,7 +57,7 @@ ALGO="lagrangian_pid"
 ENCODING="film"
 VARIANT="film_a"
 DATASET="./fhe_rl/datasets/final_llm_dataset.txt"
-TIMESTEPS=5000000
+TIMESTEPS=4400000  # same length as the joint run
 EVAL_FREQ=200000   # same as the joint and stage 2 runs: 25 evals over 5M steps
 NUM_ENVS=32
 # Keep 16384 samples per PPO update (same as the 8 envs x 2048 steps)
