@@ -11,6 +11,10 @@ from util import generate_random_assignments, evaluate_expr
 
 MAX_VECTOR_SIZE = 32
 
+class _NoRewrite(Exception):
+    pass
+
+
 ROTATION_RULE_TYPES = ("vectorize-rotation", "vectorize-rotation-flexible")
 
 
@@ -486,11 +490,7 @@ class RewriteRule:
         if self.rule_type in ["vectorize", "vectorize-flexible", "vectorize-rotation", "vectorize-rotation-flexible"]:
             return self._find_vectorize_matches(expr)
         elif self.rule_type == "de-rotate":
-            matches = []
-            self._find_matches_recursive(expr, [], matches)
-            valid = [(p, m) for p, m in matches
-                    if self._apply_via_path(expr, p) is not None]
-            return [([], expr)] if valid else []
+            return [([], expr)] if self._derotate_all(expr) is not None else []
         else:
             # Regular rules
             matches: List[Tuple[List[int], Expr]] = []
@@ -565,42 +565,39 @@ class RewriteRule:
                     else:
                         queue.append((cur_path + [0], node.args[0]))
 
-    def _apply_via_path(self, expr: Expr, path: List[int]) -> Optional[Expr]:
+    def _apply_via_path(self, expr: Expr, path: List[int], strict: bool = False) -> Optional[Expr]:
         WRAPPER_OPS = {"VecMul", "VecAdd", "VecMinus"}
 
         def rec(node: Expr, subpath: List[int]) -> Expr:
-            # reached the target node – standard replacement
             if not subpath:
-                return self.apply(node) or node
+                out = self.apply(node)
+                if out is None:
+                    if strict:
+                        raise _NoRewrite
+                    return node
+                return out
 
-            # leaf that cannot hold children
             if not isinstance(node, Op):
                 return node
 
             idx = subpath[0]
 
-            # ────────────────────────────────────────────────────────────
-            # Special case: we are stepping into the **first operand** of
-            # a wrapper (rotation) op.  After we rewrite that operand we
-            # must rebuild the *companion* operand so it references the
-            # fresh vector.
-            # ────────────────────────────────────────────────────────────
             if node.op in WRAPPER_OPS and idx == 0:
-                new_vec  = rec(node.args[0], subpath[1:])   # rewrite left
-                other    = node.args[1]
-                new_other = other  # default: no change
-                # generic deep replace if the structure is different
-                new_other = self._replace_expr(other, node.args[0], new_vec)
-
+                new_vec   = rec(node.args[0], subpath[1:])
+                new_other = self._replace_expr(node.args[1], node.args[0], new_vec)
                 return Op(node.op, [new_vec, new_other])
 
-            # default path – just recurse
             new_args = [
                 rec(a, subpath[1:]) if i == idx else a
                 for i, a in enumerate(node.args)
             ]
             return Op(node.op, new_args)
 
+        if strict:
+            try:
+                return rec(expr, path)
+            except _NoRewrite:
+                return None
         return rec(expr, path)
 
     @staticmethod
@@ -621,12 +618,39 @@ class RewriteRule:
         path:  Optional[List[int]] = None
     ) -> Expr:
         if self.rule_type == "de-rotate":
-            return self._apply_rule_everywhere(expr)
+            return self._derotate_all(expr) or expr
         if path is not None:
             return self._apply_via_path(expr, path)
         if match is not None:
             return self._apply_rule_match(expr, match)
         return self.apply(expr) or expr
+
+    def _derotate_all(self, expr: Expr, max_iters: int = 10_000) -> Optional[Expr]:
+        """Rewrite every match to a fixpoint. Return None if nothing changes
+        or if any match is left that can't be rewritten (all-or-nothing)."""
+        original, cur = expr, expr
+        seen = {cur}
+        for _ in range(max_iters):
+            matches = []
+            self._find_matches_recursive(cur, [], matches)
+            new = None
+            for p, _m in matches:
+                cand = self._apply_via_path(cur, p, strict=True)
+                if cand is not None and cand != cur:
+                    new = cand
+                    break
+            if new is None or new in seen:
+                break
+            seen.add(new)
+            cur = new
+        else:
+            raise RuntimeError(f"{self.name}: no fixpoint after {max_iters} iterations")
+
+        leftover = []
+        self._find_matches_recursive(cur, [], leftover)
+        if leftover or cur == original:
+            return None
+        return cur    
 
     def _apply_rule_everywhere(self, expr: Expr) -> Expr:
         while True:
