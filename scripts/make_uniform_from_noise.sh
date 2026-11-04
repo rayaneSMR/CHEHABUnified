@@ -64,8 +64,8 @@ s += '''
 RUN_MODEL="$(ls -t "$PROJ_ROOT"/RL/model_${SLURM_JOB_ID:-jobid}_*.zip 2>/dev/null | head -1 || true)"
 mkdir -p "$PROJ_ROOT/RL/fhe_rl/trained_models"
 if [ -n "$RUN_MODEL" ]; then
-    cp "$RUN_MODEL" "$PROJ_ROOT/RL/fhe_rl/trained_models/unified_noise_uniform.zip"
-    echo "[done] $RUN_MODEL -> RL/fhe_rl/trained_models/unified_noise_uniform.zip"
+    cp "$RUN_MODEL" "$PROJ_ROOT/RL/fhe_rl/trained_models/unified_noise_uniform_pref.zip"
+    echo "[done] $RUN_MODEL -> RL/fhe_rl/trained_models/unified_noise_uniform_pref.zip"
 else
     echo "[warn] no final model found (training did not finish?); see RL/checkpoints/"
 fi

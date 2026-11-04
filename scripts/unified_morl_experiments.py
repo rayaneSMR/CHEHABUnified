@@ -122,6 +122,10 @@ AGENTS = {
                        note="original CHEHAB single-objective RL, rotation heuristic off"),
 }
 
+# Experiment 3 publishes the uniform agent as unified_noise_uniform_pref.zip
+# (scripts/train_unified_uniform_pref.sbatch, run model_<jobid>_nato_sc_film_a_gnn_uniform_pref)
+AGENTS["uniform"].model = str(MODELS_DIR / "unified_noise_uniform_pref.zip")
+
 # e.g. evaluate a training checkpoint instead of the final model
 if os.environ.get("UNIFIED_UNIFORM_MODEL"):
     AGENTS["uniform"].model = os.environ["UNIFIED_UNIFORM_MODEL"]

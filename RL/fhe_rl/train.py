@@ -70,6 +70,7 @@ def train_agent(
     embedder_type: str = "gnn",
     n_steps: int = 2048,
     rules_subset: str = "all",
+    run_tag: str = None,
 ):
     set_random_seed(seed)
     
@@ -130,7 +131,9 @@ def train_agent(
     embedder_tag = "gnn" if "gnn" in str(embedder_type).lower() else "trae"
     job_id = os.environ.get("SLURM_JOB_ID", "jobid")
     subset_tag = f"_{rules_subset}" if rules_subset != "all" else ""
-    run_name = f"model_{job_id}_{constraint_method}_{policy_variant}_{embedder_tag}{subset_tag}"
+    # --run_tag appends a suffix, e.g. model_<job>_nato_sc_film_a_gnn_uniform_pref
+    run_suffix = f"_{run_tag}" if run_tag else ""
+    run_name = f"model_{job_id}_{constraint_method}_{policy_variant}_{embedder_tag}{subset_tag}{run_suffix}"
     tensorboard_log_dir = f"./tensorboard/{run_name}"
     checkpoint_dir = f"./checkpoints/{run_name}"
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -162,7 +165,7 @@ def train_agent(
         # 2. Search other run dirs matching this configuration (e.g. model_*_nato_sc_film_a)
         if os.path.exists("./checkpoints"):
             import glob
-            config_pattern = f"./checkpoints/model_*_{constraint_method}_{policy_variant}_{embedder_tag}{subset_tag}"
+            config_pattern = f"./checkpoints/model_*_{constraint_method}_{policy_variant}_{embedder_tag}{subset_tag}{run_suffix}"
             for d in glob.glob(config_pattern):
                 if os.path.isdir(d):
                     for f in os.listdir(d):

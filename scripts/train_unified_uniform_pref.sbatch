@@ -10,8 +10,9 @@
 # episodes at [1,0]). Every other setting below is IDENTICAL to that script, so
 # the preference distribution is the only thing that changes.
 #
-# Output model: RL/fhe_rl/trained_models/unified_noise_uniform.zip
-#   (the name scripts/unified_morl_experiments.py expects for the 'uniform' agent)
+# Run name:     model_<SLURM_JOB_ID>_nato_sc_film_a_gnn_uniform_pref   (TensorBoard, checkpoints, eval)
+# Output model: RL/fhe_rl/trained_models/unified_noise_uniform_pref.zip  (+ _best.zip)
+#   (the name the eval scripts and scripts/unified_morl_experiments.py use for the 'uniform' agent)
 #
 # Submit from the repo root:   sbatch scripts/train_unified_uniform_pref.sbatch
 # ════════════════════════════════════════════════════════════════════════════
@@ -61,7 +62,7 @@ mkdir -p "$PROJ_ROOT/logs" "$PROJ_ROOT/RL/eval" "$PROJ_ROOT/RL/checkpoints" "$PR
 cd "$PROJ_ROOT/RL"
 export PYTHONPATH="$PROJ_ROOT/RL:$PROJ_ROOT/RL/pytrs:${PYTHONPATH:-}"
 
-# ── Experiment settings (same as train_unified_noise.sbatch except N_CYCLE) ──
+# ── Settings: IDENTICAL to train_unified_noise.sbatch except N_CYCLE (ablation) ──
 CONSTRAINT="noise"
 BUDGETS="230,236,369,9000000"
 METHOD="nato_sc"
@@ -70,19 +71,18 @@ ENCODING="film"
 VARIANT="film_a"
 DATASET="./fhe_rl/datasets/final_llm_dataset.txt"
 TIMESTEPS=5000000
-EVAL_FREQ=10000
+EVAL_FREQ=200000   # one eval (69 benchmarks x 10 prefs) takes ~52 min: 25 evals over 5M steps
 NUM_ENVS=32
+# Keep 16384 samples per PPO update (same as the old 8 envs x 2048 steps)
 ROLLOUT_SIZE=16384
 N_STEPS=$((ROLLOUT_SIZE / NUM_ENVS))
-N_CYCLE=0          # 0 = uniform sampling over the preference grid (the experiment)
-N_PREF=11          # 11 points -> 10 vectors [1.0,0.0] .. [0.1,0.9]
-N_BUDGET=5
-LAMBDA_ENV=0.0
-LAMBDA_KL=0.0
+N_CYCLE=0          # ABLATION: 0 = uniform sampling over the preference grid (noise script uses the default 1)
+N_PREF=11          # default of --n_pref, only used by the preflight check below
 
-JOB="${SLURM_JOB_ID:-local}"
-RUN_NAME="model_${JOB}_${METHOD}_${VARIANT}_gnn"
-FINAL_MODEL="$PROJ_ROOT/RL/fhe_rl/trained_models/unified_noise_uniform.zip"
+JOB="${SLURM_JOB_ID:-jobid}"     # same fallback as train.py
+RUN_TAG="uniform_pref"
+RUN_NAME="model_${JOB}_${METHOD}_${VARIANT}_gnn_${RUN_TAG}"
+FINAL_MODEL="$PROJ_ROOT/RL/fhe_rl/trained_models/unified_noise_${RUN_TAG}.zip"
 TRAIN_LOG="$PROJ_ROOT/logs/train_unified_uniform_pref_${JOB}.log"
 
 echo "════════════════════════════════════════════"
@@ -94,6 +94,7 @@ echo "  Policy:          $ENCODING / $VARIANT / gnn"
 echo "  Timesteps:       $TIMESTEPS  (eval every $EVAL_FREQ)"
 echo "  Rollout:         $N_STEPS steps/env x $NUM_ENVS envs = $((N_STEPS * NUM_ENVS))"
 echo "  Job ID:          $JOB"
+echo "  Run name:        $RUN_NAME"
 echo "  Train log:       $TRAIN_LOG"
 echo "  Final model:     $FINAL_MODEL"
 echo "════════════════════════════════════════════"
@@ -143,11 +144,8 @@ stdbuf -oL -eL python -u -m fhe_rl \
     --budget_encoding "$ENCODING" \
     --policy_variant "$VARIANT" \
     --embedder gnn \
-    --n_pref $N_PREF \
     --n_cycle $N_CYCLE \
-    --n_budget $N_BUDGET \
-    --lambda_env $LAMBDA_ENV \
-    --lambda_kl $LAMBDA_KL \
+    --run_tag "$RUN_TAG" \
     --fresh_start \
     "$@" \
     > "$TRAIN_LOG" 2>&1

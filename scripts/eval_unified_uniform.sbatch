@@ -57,7 +57,7 @@ cd "$PROJ_ROOT/RL"
 export PYTHONPATH="$PROJ_ROOT/RL:$PROJ_ROOT/RL/pytrs:${PYTHONPATH:-}"
 
 # ── settings (same as training: train_unified_noise / train_unified_uniform_pref) ──
-MODEL="${1:-$PROJ_ROOT/RL/fhe_rl/trained_models/unified_noise_uniform.zip}"
+MODEL="${1:-$PROJ_ROOT/RL/fhe_rl/trained_models/unified_noise_uniform_pref.zip}"
 TAG="${2:-uniform}"
 BUDGETS="230,236,369,9000000"
 TRAIN_BUDGETS="230,236,369,9000000"

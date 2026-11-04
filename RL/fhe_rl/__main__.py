@@ -257,6 +257,14 @@ def parse_arguments(args=None):
         default="all",
         help="Rule subset to train on: 'all' (joint pipeline), 'ops' (separated Stage 1), 'rotations' (separated Stage 2)",
     )
+    train_parser.add_argument(
+        "--run_tag",
+        type=str,
+        default=None,
+        help="Suffix appended to the run name: model_<SLURM_JOB_ID>_<method>_<policy_variant>_<embedder>[_<subset>]_<run_tag> "
+             "(TensorBoard, checkpoints, eval, final .zip); auto-resume then only looks at runs with the same tag. "
+             "Default: no suffix",
+    )
 
     # ─── TEST COMMAND ─────────────────────────────────────────────────────────
     test_parser = subparsers.add_parser("test", help="Test the agent")
@@ -586,6 +594,7 @@ def main(args=None):
                 n_pref=parsed_args.n_pref,
                 n_steps=parsed_args.n_steps,
                 rules_subset=getattr(parsed_args, "rules_subset", "all"),
+                run_tag=getattr(parsed_args, "run_tag", None),
             )
 
     # ─────────────────────────────── TEST ─────────────────────────────
