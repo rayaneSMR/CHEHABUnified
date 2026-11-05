@@ -1,0 +1,9 @@
+Agent,Budget,All violations,of which initially above budget,of which initially within budget
+Unconstrained,230,25,25,0
+Unconstrained,236,25,25,0
+Unconstrained,369,16,10,6
+Unconstrained,9M,0,0,0
+Constrained (Lag-PID + NATO-SC),230,26,26,0
+Constrained (Lag-PID + NATO-SC),236,27,26,1
+Constrained (Lag-PID + NATO-SC),369,15,10,5
+Constrained (Lag-PID + NATO-SC),9M,0,0,0

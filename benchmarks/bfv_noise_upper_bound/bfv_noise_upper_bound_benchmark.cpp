@@ -1,4 +1,4 @@
-#include "ufhe/seal_backend/bfv_noise_estimator.hpp"
+#include "ufhe/seal_backend/bfv_noise_bound.hpp"
 
 #include "seal/seal.h"
 #include <cstddef>
@@ -126,7 +126,7 @@ int main(int argc, char **argv)
   parms.set_coeff_modulus(seal::CoeffModulus::Create(poly_modulus_degree, {50, 50, 50, 50}));
   parms.set_plain_modulus(seal::PlainModulus::Batching(poly_modulus_degree, 20));
   seal::SEALContext context(parms);
-  ufhe::seal_backend::BFVNoiseEstimator estimator(context);
+  ufhe::seal_backend::BFVNoiseBound estimator(context);
   int allocated_initial_noise_budget_bits =
     context.first_context_data()->total_coeff_modulus_bit_count() - parms.plain_modulus().bit_count();
 

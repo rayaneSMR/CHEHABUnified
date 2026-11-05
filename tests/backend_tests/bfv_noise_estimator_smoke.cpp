@@ -1,4 +1,4 @@
-#include "ufhe/seal_backend/bfv_noise_estimator.hpp"
+#include "ufhe/seal_backend/bfv_noise_bound.hpp"
 
 #include "seal/seal.h"
 
@@ -10,7 +10,7 @@ int main()
   parms.set_plain_modulus(seal::PlainModulus::Batching(4096, 20));
   seal::SEALContext context(parms);
 
-  ufhe::seal_backend::BFVNoiseEstimator estimator(context);
+  ufhe::seal_backend::BFVNoiseBound estimator(context);
   auto input = ufhe::seal_backend::BFVNoiseExpression::fresh();
   auto expression = ufhe::seal_backend::BFVNoiseExpression::add(input, input);
   auto estimate = estimator.BFV_noise_bound(expression);

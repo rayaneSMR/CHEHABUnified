@@ -1,0 +1,61 @@
+{
+  "experiment": "experiment_1 (NNLS noise-estimator validation)",
+  "generated_utc": "2026-10-30T15:31:30+00:00",
+  "dataset": {
+    "path": "RL/fhe_rl/datasets/noise_estimator_stats_dataset.csv",
+    "sha256": "36a57ddd26b692f85efd8e77a8e5eabed338126fdb49b03798f2030a6e2e068c",
+    "rows": 15824,
+    "rows_budget_exhausted": 2
+  },
+  "noise_budget_constant": 369,
+  "features_model_order": [
+    "add",
+    "sub",
+    "multiply_plain",
+    "rotate_rows",
+    "negate",
+    "multiply",
+    "Depth",
+    "Multiplicative Depth"
+  ],
+  "model": "LinearRegression(fit_intercept=False, positive=True), fitted on all rows (as RL/pytrs/noise_estimator.py)",
+  "supplementary_cv": {
+    "folds": 5,
+    "seed": 0,
+    "note": "choice made for this reproduction; not in repo code"
+  },
+  "environment": {
+    "python": "3.12.4",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "numpy": "2.1.1",
+    "pandas": "2.2.2",
+    "scikit-learn": "1.5.1",
+    "scipy": "1.14.1",
+    "matplotlib": "3.9.2"
+  },
+  "repo_sources_sha256_lf_normalised": {
+    "RL/pytrs/noise_estimator.py": "100b26cd16e65eaae78dac0eef1152c469ccbc61497c845be5aa418e682d1c04",
+    "RL/pytrs/cost.py": "8f9cb5517249ae1704ebeec2d60e73e959aa8e102045f9f93c426272d21977d4"
+  },
+  "repo_estimator_check": {
+    "checked": true,
+    "default_noise_budget": 369,
+    "max_abs_coef_diff": 0.0
+  },
+  "outputs": [
+    "1B_nnls_coefficients.csv",
+    "1A_feature_noise_correlation.csv",
+    "1A_mean_noise_by_multiplicative_depth.csv",
+    "1A_feature_correlation_matrix.csv",
+    "1A_feature_vs_noise.png",
+    "1A_multiplicative_depth_vs_noise.png",
+    "1C_accuracy_metrics.csv",
+    "1C_error_direction.csv",
+    "1C_error_by_multiplicative_depth.csv",
+    "1C_supplementary_checks.csv",
+    "1C_estimated_vs_actual.png",
+    "1C_residuals.png",
+    "exp1_results.md",
+    "run_metadata.json"
+  ]
+}

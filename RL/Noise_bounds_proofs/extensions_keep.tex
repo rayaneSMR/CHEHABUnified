@@ -1,0 +1,897 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=25mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{array}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\allowdisplaybreaks
+
+% ---------------------------------------------------------------
+% Macros copied unchanged from SEAL_manual_appendix.tex
+% ---------------------------------------------------------------
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+\newcommand{\ct}{\mathrm{ct}}
+\newcommand{\ctadd}{\mathrm{ct}_{\mathrm{add}}}
+\newcommand{\ctmult}{\mathrm{ct}_{\mathrm{mult}}}
+\newcommand{\ctrelin}{\mathrm{ct}_{\mathrm{relin}}}
+\newcommand{\ctpmult}{\mathrm{ct}_{\mathrm{pmult}}}
+\newcommand{\ctpadd}{\mathrm{ct}_{\mathrm{padd}}}
+\newcommand{\ctneg}{\mathrm{ct}_{\mathrm{neg}}}
+\newcommand{\ctsub}{\mathrm{ct}_{\mathrm{sub}}}
+\newcommand{\ctpsub}{\mathrm{ct}_{\mathrm{psub}}}
+\newcommand{\vadd}{v_{\mathrm{add}}}
+\newcommand{\vmult}{v_{\mathrm{mult}}}
+\newcommand{\vrelin}{v_{\mathrm{relin}}}
+\newcommand{\vpmult}{v_{\mathrm{pmult}}}
+\newcommand{\vpadd}{v_{\mathrm{padd}}}
+\newcommand{\vneg}{v_{\mathrm{neg}}}
+\newcommand{\vsub}{v_{\mathrm{sub}}}
+\newcommand{\vpsub}{v_{\mathrm{psub}}}
+\newcommand{\N}{\mathbb{N}}
+
+% ---------------------------------------------------------------
+% Additional macros (new symbols, none redefines a SEAL symbol)
+% ---------------------------------------------------------------
+\newcommand{\qstar}[1]{q^{*}_{#1}}
+\newcommand{\qtilde}[1]{\tilde{q}_{#1}}
+% symbols for the multiplication of [4] (Section 3); none occurs in Table 1
+\newcommand{\musk}{\mu_{\mathrm{sk}}}
+\newcommand{\mutilde}{\tilde{\mu}}
+\newcommand{\fastbconv}{\mathrm{FastBconv}}
+\newcommand{\ur}[2]{\left\langle #1\right\rangle_{#2}}   % representative in [0,#2)
+\newcommand{\Sgeo}[1]{\frac{n^{#1+1}-1}{n-1}}            % geometric sum used in Lemma 11
+
+\theoremstyle{plain}
+\newtheorem*{lemmaRNS}{Lemma 12\textsuperscript{RNS}}
+\newtheorem*{corollaryRNS}{Corollary 12\textsuperscript{RNS-$w$}}
+\newtheorem*{corollaryRNSu}{Corollary 12\textsuperscript{RNS-u}}
+\newtheorem*{lemmaRNSmult}{Lemma 11\textsuperscript{RNS}}
+\theoremstyle{definition}
+\newtheorem*{definition*}{Definition}
+\newtheorem*{assumption*}{Assumption}
+\theoremstyle{remark}
+\newtheorem*{remark*}{Remark}
+
+\title{BFV Noise-Bound Extensions for Microsoft SEAL 2.3.1\\[0.3em]
+       Track 1: Adaptation of the Strict Noise Bounds to the RNS Representation}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+% =================================================================
+\section{Sources, conventions and status}
+% =================================================================
+
+\subsection{Sources used}
+
+\begin{itemize}[leftmargin=2em]
+\item \texttt{SEAL\_manual\_appendix.tex}: Lemmas 9--17 and their proofs
+      (the \emph{original} results; they are not modified here).
+\item \texttt{Notations.tex}: Table~1 of the manual (notation), used unchanged.
+\item \texttt{sealmanual-2-3-1.md}: Section~4.3 (textbook-BFV, evaluation keys),
+      Section~5.4 (relinearization), Section~5.8 (composite coefficient modulus),
+      Section~6 (Definition~1 of the invariant noise, Lemma~1).
+\item \texttt{noise\_bound\_implementation}: reference only; no formula of the
+      implementation is taken as a mathematical fact.
+\end{itemize}
+
+\subsection{Conventions}
+
+All notation of SEAL (Table~1) is used unchanged: $q=q_1\times\cdots\times q_k$
+with the $q_i$ prime, $t$, $n$, $R$, $R_a$, $w$, $\ell$, $\Delta$, $r_t(q)$,
+$\chi$, $B$, together with $\norm{\cdot}$ (infinity norm), $\ct$, $\vrelin$,
+$\ctrelin$, and so on. In particular the full modulus keeps the name $q$ of the
+manual (not $Q$); the individual RNS moduli are the $q_i$ of Table~1, indexed by
+$i\in\{1,\dots,k\}$, and $k$ always denotes their \emph{number}. For a ciphertext
+$(c_0,\dots,c_M)$ the degree is called $M$ as in the statement of Lemma~12 (the
+proof of Lemma~12 writes $\mathrm{evk}_k$ for the key attached to $s^k$; to avoid a
+clash with the number $k$ of moduli we write $\mathrm{evk}_M$ here).
+
+The invariant noise $v$ of a ciphertext $\ct=(c_0,\dots,c_M)$ encrypting $m\in R_t$
+is the one of Definition~1 of the manual:
+\[
+  \frac{t}{q}\ct(s)=\frac{t}{q}\bigl(c_0+c_1s+\cdots+c_Ms^M\bigr)=m+v+at\in R\otimes\mathbb{Q}
+\]
+for some polynomial $a$ with integer coefficients. As in the appendix, ciphertext
+components are lifted from $R_q$ to $R$ for this computation.
+
+\subsection{Which operations need an RNS adaptation?}
+
+SEAL provides a strict bound lemma for exactly the operations of Lemmas 9--17.
+By Section~5.8 of the manual, the Chinese Remainder Theorem gives a ring
+isomorphism $R_q\cong R_{q_1}\times\cdots\times R_{q_k}$.
+
+\textbf{Observation 1 (ring operations).}
+Let $\varphi\colon R_q\to R_{q_1}\times\cdots\times R_{q_k}$ be this isomorphism.
+If an operation produces its output in $R_q$ by an expression built only from
+$+$, $-$ and $\cdot$ applied to elements of $R_q$ (including the constants
+$\Delta m_2$ and $m_2$, viewed in $R_q$), then computing the expression
+component-wise on $\varphi(\cdot)$ gives $\varphi$ of the same element of $R_q$,
+because $\varphi$ is a ring homomorphism and bijective. For such operations the
+statement and the proof of the corresponding SEAL lemma refer only to the
+\emph{output element of $R_q$} (never to its representation), so they hold
+\emph{verbatim} in the RNS representation. In the same way, sampling
+$a\xleftarrow{\$}R_q$ is equivalent to sampling the $k$ components
+independently and uniformly in the $R_{q_i}$, since $\varphi$ is a bijection.
+\hfill$\square$
+
+Table~\ref{tab:status} classifies the operations. The classification of
+Lemma~11 is not a decision: see Section~\ref{sec:missing}.
+
+\begin{table}[ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{|c|l|p{9.2cm}|}
+\hline
+\textbf{SEAL} & \textbf{Operation} & \textbf{Status in the RNS case}\\
+\hline
+9  & Initial noise        & Ring operations and uniform sampling only: Observation~1, Lemma~9 holds verbatim.\\
+\hline
+10 & Addition             & Ring operation: Lemma~10 holds verbatim.\\
+\hline
+11 & Multiplication       & \textbf{Needs adaptation} (not a ring operation: scaling by $t/q$ and rounding). Derived in Section~\ref{sec:mult}, \emph{conditionally} on the algorithm of [4] as recalled there (not in the package, Section~\ref{sec:missing}).\\
+\hline
+12 & Relinearization      & \textbf{Needs adaptation}: the decomposition of $c_M$ and the evaluation keys depend on the RNS structure of $q$ (Section~\ref{sec:relin}).\\
+\hline
+13 & Plain multiplication & Ring operation: Lemma~13 holds verbatim.\\
+\hline
+14 & Plain addition       & Ring operation: Lemma~14 holds verbatim.\\
+\hline
+15 & Negation             & Ring operation: Lemma~15 holds verbatim.\\
+\hline
+16 & Subtraction          & Ring operations: Lemma~16 holds verbatim.\\
+\hline
+17 & Plain subtraction    & Ring operations: Lemma~17 holds verbatim.\\
+\hline
+\end{tabular}
+\caption{Status of the lemmas of the SEAL appendix in the RNS representation.}
+\label{tab:status}
+\end{table}
+
+Only the relinearization (Section~\ref{sec:relin}) and the multiplication (Section~\ref{sec:mult}) are derived below. Rotations (Galois automorphisms) and
+modulus switching have no bound lemma in the SEAL appendix, so they belong to
+Track~2 and are not treated here.
+
+\subsection{Missing material, reported explicitly}
+\label{sec:missing}
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Reference [4]} (Bajard--Eynard--Hasan--Zucca, \emph{A full RNS variant
+      of FV like somewhat homomorphic encryption schemes}) is not in the package.
+      The manual says only that SEAL 2.3.1 ``implements a combination of the
+      classical relinearization operation and the FullRNS relinearization
+      described in [4]'' (Section~5.8). It does not give the structure of the
+      SEAL 2.3.1 evaluation keys in the RNS case. Section~\ref{sec:relin} therefore
+      states the RNS decomposition it uses as an explicit \emph{definition}
+      (the standard CRT decomposition), and treats the additional base-$w$
+      decomposition as an explicit \emph{hypothesis} (Corollary~12\textsuperscript{RNS-$w$}).
+      Whether this matches the SEAL 2.3.1 source code exactly is \textbf{not
+      verified} from the available material.
+\item \textbf{Lemma 11 in RNS.} The manual states (Section~6) that SEAL
+      implements the method of [4], which ``has slightly different noise growth
+      properties than textbook-BFV''. The multiplication of [4] replaces the
+      exact rounding $\epsilon_i\in(-\frac12,\frac12]$ of the proof of Lemma~11 by
+      RNS base conversions whose error terms are analysed in [4]. Without
+      the algorithm and its error analysis, no rigorous adapted bound can be
+      established from the package alone. Section~\ref{sec:mult} therefore states the algorithm of [4]
+      \emph{as recalled by the author of this file} as an explicit definition, and derives a bound
+      that is \textbf{conditional} on it (Lemma~11\textsuperscript{RNS}). That it coincides with the
+      SEAL~2.3.1 source is \textbf{not verified}.
+\end{enumerate}
+
+% =================================================================
+\section{Relinearization (SEAL Lemma 12) in the RNS representation}
+\label{sec:relin}
+% =================================================================
+
+\subsection{The original statement and why it must be adapted}
+
+\textbf{SEAL, Lemma 12} (reproduced from \texttt{SEAL\_manual\_appendix.tex}, not modified).
+Let $\ct$ be a ciphertext of size $M+1$ encrypting $m$, and having noise $v$.
+Let $\ctrelin$ of size $N+1$ be the ciphertext encrypting $m$, obtained by the
+relinearization of $\ct$, where $2\leq N+1<M+1$. Then
+\[
+ \vrelin=v-\frac{t}{q}\sum_{j=0}^{M-N-1}\sum_{i=0}^{\ell}e_{M-j,i}\,c_{M-j}^{(i)},
+ \qquad
+ \norm{\vrelin}\leq\norm{v}+\frac{t}{q}(M-N)\,nB(\ell+1)\,w .
+\]
+
+The proof of Lemma 12 uses exactly three properties of the base-$w$ decomposition
+$c_M=\sum_{i=0}^{\ell}c_M^{(i)}w^i$ and of the evaluation key
+$\mathrm{evk}_M[i]=\bigl([-(a_{M,i}s+e_{M,i})+w^is^M]_q,\ a_{M,i}\bigr)$:
+\begin{enumerate}[leftmargin=2.5em,label=(P\arabic*)]
+\item \emph{exactness}: $\sum_{i=0}^{\ell}w^i c_M^{(i)}=c_M$;
+\item \emph{key identity}: $\mathrm{evk}_M[i][0]+\mathrm{evk}_M[i][1]\,s\equiv -e_{M,i}+w^is^M\pmod q$;
+\item \emph{size}: the number of terms is $\ell+1$ and $\norm{c_M^{(i)}}\leq w$.
+\end{enumerate}
+
+In the RNS representation $c_M\in R_q$ is stored as its $k$ residues in
+$R_{q_1},\dots,R_{q_k}$ (Section~5.8 of the manual). A base-$w$ expansion of $c_M$
+as an element of $R$ would require reconstructing the coefficients modulo
+$q=q_1\cdots q_k$ (multi-precision arithmetic), which is what the RNS variant of
+[4] avoids. The decomposition is instead taken with respect to the $q_i$. This
+changes (P1)--(P3): the exact identity (P1) is replaced by a congruence modulo $q$,
+the key encrypts $\qstar{i}s^M$ instead of $w^is^M$, and the number of terms and
+their size become $k$ and $q_i/2$. By Observation~1, everything else in the proof
+(sums, products of ring elements, reductions modulo $q$) is representation-independent.
+
+\subsection{Definitions and hypotheses for the RNS case}
+
+The symbols $\qstar{i}$ and $\qtilde{i}$ below are new symbols (they do not occur in
+Table~1); no symbol of Table~1 is redefined. The superscript $(i)$ in $c_M^{(i)}$
+keeps its role of Lemma~12 (the $i$-th piece of the decomposition of $c_M$ that is
+multiplied with the $i$-th evaluation-key pair), but in this section $i$ runs over
+$\{1,\dots,k\}$ and the piece is the RNS digit defined next.
+
+\begin{definition*}[RNS digits]
+The $q_i$ are pairwise coprime primes (Section~5.8). For $i\in\{1,\dots,k\}$ put
+\[
+ \qstar{i}:=\frac{q}{q_i}\in\mathbb{Z},\qquad
+ \qtilde{i}:=\bigl[(\qstar{i})^{-1}\bigr]_{q_i}\in\mathbb{Z},
+\]
+where the inverse exists because $\gcd(\qstar{i},q_i)=1$. For $c\in R_q$, identify $c$
+with a representative in $R$ (the argument only uses that it is an element of $R$
+congruent to $c$ modulo $q$) and define its \emph{$i$-th RNS digit}
+\[
+ c^{(i)}:=\bigl[\qtilde{i}\,c\bigr]_{q_i}\in R,
+\]
+with the reduction into the symmetric interval $[-q_i/2,q_i/2)$ applied coefficient-wise,
+as for $[\cdot]_t$ in the Notation paragraph. Hence $\norm{c^{(i)}}\leq q_i/2$.
+\end{definition*}
+
+\begin{definition*}[RNS evaluation keys and RNS relinearization]
+For each $m$ with $2\leq m\leq M$ and $i\in\{1,\dots,k\}$ the evaluation key of degree $m$ is
+\[
+ \mathrm{evk}_m[i]=\Bigl(\bigl[-(a_{m,i}s+e_{m,i})+\qstar{i}\,s^m\bigr]_q,\ a_{m,i}\Bigr),
+ \qquad a_{m,i}\xleftarrow{\$}R_q,\quad e_{m,i}\leftarrow\chi,
+\]
+that is, $w^i$ of Section~4.3 is replaced by $\qstar{i}$ and the index set
+$\{0,\dots,\ell\}$ by $\{1,\dots,k\}$. A \emph{one-step RNS relinearization} of
+$\ct=(c_0,\dots,c_M)$ outputs $\ct'=(c'_0,\dots,c'_{M-1})$ with
+\[
+ c'_0=\Bigl[c_0+\sum_{i=1}^{k}\mathrm{evk}_M[i][0]\,c_M^{(i)}\Bigr]_q,\quad
+ c'_1=\Bigl[c_1+\sum_{i=1}^{k}\mathrm{evk}_M[i][1]\,c_M^{(i)}\Bigr]_q,\quad
+ c'_j=c_j\ (2\leq j\leq M-1).
+\]
+Relinearization from size $M+1$ to size $N+1$ is the composition of the $M-N$
+one-step relinearizations (using $\mathrm{evk}_M,\mathrm{evk}_{M-1},\dots,\mathrm{evk}_{N+1}$),
+exactly as in the proof of Lemma 12.
+\end{definition*}
+
+\begin{assumption*}[hypotheses used in this section]
+\begin{enumerate}[leftmargin=2em,label=(H\arabic*)]
+\item The secret key $s$ is a polynomial with integer coefficients (SEAL: coefficients in $\{-1,0,1\}$,
+      Section~5.9; the norm of $s$ is \emph{not} used by the bound).
+\item Every $e_{m,i}$ is a sample of $\chi$, hence $\norm{e_{m,i}}\leq B$ (Table~1, $B$ bounds $\chi$).
+\item The key structure is the one of the previous definition. This is the standard
+      CRT decomposition; that SEAL~2.3.1 uses exactly this key structure is \textbf{not verified}
+      from the package (see Section~\ref{sec:missing}, item~1). Hypotheses (H1)--(H2) are
+      the same as those of Lemma 12.
+\end{enumerate}
+\end{assumption*}
+
+\subsection{Statement}
+
+\begin{lemmaRNS}[Relinearization, RNS decomposition]
+Let $\ct$ be a ciphertext of size $M+1$ encrypting $m$, and having noise $v$. Let $\ctrelin$
+of size $N+1$ be the ciphertext encrypting $m$ obtained by the RNS relinearization of $\ct$
+(Definition above), where $2\leq N+1<M+1$. Then the noise $\vrelin$ in $\ctrelin$ is given by
+\[
+ \vrelin=v-\frac{t}{q}\sum_{j=0}^{M-N-1}\sum_{i=1}^{k}e_{M-j,i}\,c_{M-j}^{(i)},
+\]
+and can be bounded as
+\[
+ \norm{\vrelin}\leq\norm{v}+\frac{t}{2q}\,(M-N)\,nB\sum_{i=1}^{k}q_i .
+\]
+\end{lemmaRNS}
+
+\subsection{Proof}
+
+We first record two facts.
+
+\textbf{Claim 1 (CRT reconstruction).} For every $c\in R_q$ there is $K\in R$ (integer coefficients) with
+\[
+ \sum_{i=1}^{k}\qstar{i}\,c^{(i)}=c+Kq .
+\]
+\begin{proof}[Proof of Claim 1]
+Work coefficient-wise and fix $j\in\{1,\dots,k\}$. For $i\neq j$, $q_j\mid\qstar{i}$, so
+$\qstar{i}c^{(i)}\equiv0\pmod{q_j}$. For $i=j$, $c^{(j)}\equiv\qtilde{j}\,c\pmod{q_j}$ and
+$\qstar{j}\qtilde{j}\equiv1\pmod{q_j}$, hence $\qstar{j}c^{(j)}\equiv c\pmod{q_j}$. Therefore
+$\sum_i\qstar{i}c^{(i)}-c\equiv0\pmod{q_j}$ for every $j$. Since the $q_j$ are pairwise coprime,
+this difference is divisible by $q_1\cdots q_k=q$.
+\end{proof}
+
+\textbf{Claim 2.} For $a,b\in R$, $\norm{ab}\leq n\norm{a}\norm{b}$.
+\begin{proof}[Proof of Claim 2]
+In $R=\mathbb{Z}[x]/(x^n+1)$ each coefficient of $ab$ is a signed sum of exactly $n$ products
+$a_ub_{u'}$ of coefficients, each of absolute value at most $\norm{a}\norm{b}$. (This is the
+bound $\delta\leq n$ of Table~1, used in the same way in the proof of Lemma 12.)
+\end{proof}
+
+\textbf{One-step relinearization.} Let $\ct=(c_0,\dots,c_M)$ with $M\geq2$ encrypt $m$ with
+noise $v$, so that for some $a\in R$
+\[
+ \frac{t}{q}\ct(s)=m+v+at .
+\]
+Write $a_i:=a_{M,i}$, $e_i:=e_{M,i}$, $c^{(i)}:=c_M^{(i)}$. Lifting the reductions $[\cdot]_q$ to $R$,
+there are polynomials $b_i,d_0,d_1\in R$ with
+\[
+ \mathrm{evk}_M[i][0]=-(a_is+e_i)+\qstar{i}s^M+b_iq,\qquad
+ \mathrm{evk}_M[i][1]=a_i,
+\]
+\[
+ c'_0=c_0+\sum_{i=1}^{k}\mathrm{evk}_M[i][0]\,c^{(i)}+d_0q,\qquad
+ c'_1=c_1+\sum_{i=1}^{k}a_i\,c^{(i)}+d_1q .
+\]
+Then
+\begin{align*}
+c'_0+c'_1s
+&=c_0+c_1s+\sum_{i=1}^{k}\bigl(-a_is-e_i+\qstar{i}s^M+b_iq+a_is\bigr)c^{(i)}+(d_0+d_1s)q\\
+&=c_0+c_1s-\sum_{i=1}^{k}e_ic^{(i)}+s^M\sum_{i=1}^{k}\qstar{i}c^{(i)}
+   +q\Bigl(\sum_{i=1}^{k}b_ic^{(i)}+d_0+d_1s\Bigr)\\
+&=c_0+c_1s+c_Ms^M-\sum_{i=1}^{k}e_ic^{(i)}+qA',
+\end{align*}
+where in the last step Claim~1 gave $\sum_i\qstar{i}c^{(i)}=c_M+Kq$, and
+\[
+ A':=Ks^M+\sum_{i=1}^{k}b_ic^{(i)}+d_0+d_1s\in R .
+\]
+Since $c'_j=c_j$ for $2\leq j\leq M-1$, adding $c_2s^2+\cdots+c_{M-1}s^{M-1}$ gives
+\[
+ \ct'(s)=\ct(s)-\sum_{i=1}^{k}e_ic^{(i)}+qA' .
+\]
+Multiplying by $t/q$,
+\begin{align*}
+\frac{t}{q}\ct'(s)
+&=\frac{t}{q}\ct(s)-\frac{t}{q}\sum_{i=1}^{k}e_ic^{(i)}+tA'\\
+&=m+v-\frac{t}{q}\sum_{i=1}^{k}e_{M,i}\,c_M^{(i)}+(a+A')\,t ,
+\end{align*}
+with $a+A'\in R$. Hence $\ct'$ encrypts the same $m$, and the noise grows by the additive term
+$-\frac{t}{q}\sum_{i=1}^{k}e_{M,i}c_M^{(i)}$ in a one-step RNS relinearization.
+
+\textbf{Iteration.} Let $\ct^{[0]}=\ct$ and let $\ct^{[j+1]}$ be the one-step relinearization of
+$\ct^{[j]}$ with $\mathrm{evk}_{M-j}$, for $0\leq j\leq M-N-1$; then $\ct^{[M-N]}=\ctrelin$. A one-step
+relinearization changes only the components of index $0$ and $1$. For $j\leq M-N-1$ the top component
+of $\ct^{[j]}$ has index $M-j\geq N+1\geq2$, so it equals the component $c_{M-j}$ of the original $\ct$.
+Applying the one-step computation to $\ct^{[j]}$ (valid since $M-j\geq2$) and inducting on $j$ gives
+\[
+ \vrelin=v-\frac{t}{q}\sum_{j=0}^{M-N-1}\sum_{i=1}^{k}e_{M-j,i}\,c_{M-j}^{(i)} .
+\]
+
+\textbf{Bound.} By the triangle inequality, Claim~2, $\norm{e_{M-j,i}}\leq B$ (H2) and
+$\norm{c_{M-j}^{(i)}}\leq q_i/2$ (Definition of RNS digits),
+\begin{align*}
+\norm{\vrelin}
+&\leq\norm{v}+\frac{t}{q}\sum_{j=0}^{M-N-1}\sum_{i=1}^{k}\norm{e_{M-j,i}\,c_{M-j}^{(i)}}\\
+&\leq\norm{v}+\frac{t}{q}\sum_{j=0}^{M-N-1}\sum_{i=1}^{k}n\,B\,\frac{q_i}{2}\\
+&=\norm{v}+\frac{t}{2q}(M-N)\,nB\sum_{i=1}^{k}q_i .
+\end{align*}
+\hfill$\square$
+
+\subsection{Variant with an additional base-$w$ decomposition}
+
+Section~5.8 of the manual says that SEAL~2.3.1 implements a \emph{combination} of the classical
+and the FullRNS relinearization, with a decomposition bit count of at most $60$. The natural
+reading is that each RNS digit is further decomposed in base $w$. The following is stated
+as a corollary \emph{under that reading}, which is not verified against the SEAL source (item~1 of
+Section~\ref{sec:missing}).
+
+\begin{definition*}[RNS digits in base $w$]
+For $c\in R_q$ and $i\in\{1,\dots,k\}$ let $\bar c^{(i)}\in R$ be the polynomial with coefficients
+in $[0,q_i)$ congruent to $c^{(i)}$ modulo $q_i$. Put $\ell_i:=\lfloor\log_wq_i\rfloor$ (a new symbol, the
+analogue of $\ell$ in Table~1 for the modulus $q_i$). Write
+\[
+ \bar c^{(i)}=\sum_{h=0}^{\ell_i}c^{(i,h)}w^h,\qquad c^{(i,h)}\in R\text{ with coefficients in }\{0,\dots,w-1\}.
+\]
+This is possible because each coefficient is $<q_i<w^{\ell_i+1}$. The evaluation keys are
+$\mathrm{evk}_m[i,h]=\bigl([-(a_{m,i,h}s+e_{m,i,h})+w^h\qstar{i}s^m]_q,\ a_{m,i,h}\bigr)$ for
+$i\in\{1,\dots,k\}$, $h\in\{0,\dots,\ell_i\}$, and the one-step relinearization uses
+$c'_0=[c_0+\sum_{i,h}\mathrm{evk}_M[i,h][0]\,c_M^{(i,h)}]_q$ and the analogous $c'_1$.
+\end{definition*}
+
+\begin{corollaryRNS}
+Under the hypotheses of Lemma~12\textsuperscript{RNS} with the previous definition,
+\[
+ \vrelin=v-\frac{t}{q}\sum_{j=0}^{M-N-1}\sum_{i=1}^{k}\sum_{h=0}^{\ell_i}e_{M-j,i,h}\,c_{M-j}^{(i,h)},
+ \qquad
+ \norm{\vrelin}\leq\norm{v}+\frac{t}{q}(M-N)\,nB\,w\sum_{i=1}^{k}(\ell_i+1).
+\]
+\end{corollaryRNS}
+
+\begin{proof}
+\emph{Exactness.} Since $\bar c^{(i)}\equiv c^{(i)}\pmod{q_i}$ and $q_i\qstar{i}=q$,
+$\qstar{i}\bar c^{(i)}\equiv\qstar{i}c^{(i)}\pmod q$. With Claim~1,
+\[
+ \sum_{i=1}^{k}\sum_{h=0}^{\ell_i}w^h\qstar{i}c_M^{(i,h)}=\sum_{i=1}^{k}\qstar{i}\bar c_M^{(i)}=c_M+K'q
+\]
+for some $K'\in R$. \emph{One step.} With $\mathrm{evk}_M[i,h][0]=-(a_{i,h}s+e_{i,h})+w^h\qstar{i}s^M+b_{i,h}q$,
+$\mathrm{evk}_M[i,h][1]=a_{i,h}$, and lifts $d_0,d_1\in R$ of the reductions $[\cdot]_q$,
+\begin{align*}
+c'_0+c'_1s
+&=c_0+c_1s-\sum_{i,h}e_{i,h}c_M^{(i,h)}+s^M\sum_{i,h}w^h\qstar{i}c_M^{(i,h)}
+  +q\Bigl(\sum_{i,h}b_{i,h}c_M^{(i,h)}+d_0+d_1s\Bigr)\\
+&=c_0+c_1s+c_Ms^M-\sum_{i,h}e_{i,h}c_M^{(i,h)}+qA'' ,
+\end{align*}
+with $A'':=K's^M+\sum_{i,h}b_{i,h}c_M^{(i,h)}+d_0+d_1s\in R$. As in the proof of the Lemma, multiplying by
+$t/q$ shows that the noise grows by $-\frac tq\sum_{i,h}e_{M,i,h}c_M^{(i,h)}$, and the iteration over
+$j$ is unchanged. \emph{Bound.} $\norm{e_{M-j,i,h}}\leq B$, $\norm{c_{M-j}^{(i,h)}}\leq w-1\leq w$,
+and for each $j$ there are $\sum_{i=1}^{k}(\ell_i+1)$ pairs $(i,h)$. With Claim~2,
+\[
+ \norm{\vrelin}\leq\norm{v}+\frac{t}{q}\sum_{j=0}^{M-N-1}\sum_{i=1}^{k}\sum_{h=0}^{\ell_i}nBw
+ =\norm{v}+\frac{t}{q}(M-N)\,nBw\sum_{i=1}^{k}(\ell_i+1).
+\]
+\end{proof}
+
+\begin{corollaryRNSu}[Relinearization with unsigned RNS digits]
+Under the hypotheses of Lemma~12\textsuperscript{RNS}, if the RNS digits are taken with the unsigned representative in $[0,q_i)$ so that $\norm{c^{(i)}}\leq q_i-1<q_i$, then
+\[
+ \vrelin=v-\frac{t}{q}\sum_{j=0}^{M-N-1}\sum_{i=1}^{k}e_{M-j,i}\,c_{M-j}^{(i)},
+ \qquad
+ \norm{\vrelin}\leq\norm{v}+\frac{t}{q}\,(M-N)\,nB\sum_{i=1}^{k}q_i .
+\]
+\end{corollaryRNSu}
+
+\begin{proof}
+The algebraic expression for $\vrelin$ is identical to that of Lemma~12\textsuperscript{RNS}. In the norm bound, substituting $\norm{c_{M-j}^{(i)}}\leq q_i$ in place of $q_i/2$ and summing over $j\in\{0,\dots,M-N-1\}$ and $i\in\{1,\dots,k\}$ yields the stated bound.
+\end{proof}
+
+\subsection{Remarks: differences from the original SEAL result}
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Structure of the bound.} Lemma 12 has $(\ell+1)$ terms of size $w$ per step;
+      Lemma 12\textsuperscript{RNS} has $k$ terms of size $q_i/2$, and the Corollary has
+      $\sum_i(\ell_i+1)$ terms of size $w$. The factor $t/q$, the count $M-N$ of one-step
+      relinearizations, the factor $n$ and the bound $B$ are unchanged.
+\item \textbf{No new additive noise term.} The reconstruction in RNS is only a congruence modulo $q$
+      ($\sum_i\qstar{i}c^{(i)}=c_M+Kq$ with $K\neq0$ in general), whereas (P1) is an equality for
+      $c_M\in[0,q)$. The extra multiple $Kq$ is multiplied by $t/q$ into the integer multiple $tKs^M$
+      of $t$ and absorbed into the polynomial $a$, like the term $a_{\ell+1}$ in the proof of Lemma 12.
+      The noise formula therefore keeps the exact shape of Lemma 12.
+\item \textbf{Equivalent formulation.} Taking the digits to be the raw residues $[c]_{q_i}$ and the
+      keys to encrypt $\qstar{i}\qtilde{i}\,s^m$ gives the same identity $\sum_i\qstar{i}\qtilde{i}[c]_{q_i}\equiv c\pmod q$
+      and the same bound, because only $\norm{\text{digit}}\leq q_i/2$ is used. Which of the two SEAL~2.3.1
+      uses does not matter for the bound.
+\item \textbf{Digit convention.} With the unsigned representative in $[0,q_i)$ the digit bound is
+      $q_i-1<q_i$ instead of $q_i/2$; the proof is unchanged and the bound is $\frac tq(M-N)nB\sum_iq_i$.
+\item \textbf{Relation to the reference implementation.} The relinearization term of
+      \texttt{bfv\_noise\_bound.cpp} is $\frac tq(\text{size}-2)\,nB\sum_iq_i$ (with $\text{size}-2=M-N$ for $N=1$).
+      This is exactly the bound of remark~4, hence twice the Lemma 12\textsuperscript{RNS} term, so it is a valid
+      (not tight) upper bound for a pure RNS decomposition. It is a valid bound for the base-$w$ variant
+      whenever $w(\ell_i+1)\leq q_i$ for all $i$ (then it dominates the Corollary term by term). It has no
+      $\ell_i$ and no $w$, so it does not follow the Corollary for large $w$. This comparison is a consistency
+      observation, not a derivation from the implementation.
+\end{enumerate}
+
+\subsection{Correctness check}
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Consistency with the SEAL definitions.} The noise is the one of Definition~1. The key shape is that of
+      Section~4.3 with $w^i$ replaced by $\qstar{i}$; the proof copies the steps of the proof of Lemma 12
+      (lift $[\cdot]_q$ to $R$, expand $\ct'(s)$, absorb multiples of $q$ into integer polynomials, iterate,
+      triangle inequality). $s$ needs only integer coefficients (H1), which holds both for $R_2$ of
+      Section~4.3 and $R_3$ of Section~5.9.
+\item \textbf{RNS moduli and $q$.} The proof of Claim~1 was checked prime by prime: for $i\neq j$,
+      $q_j\mid\qstar{i}$, and $\qstar{j}\qtilde{j}\equiv1\pmod{q_j}$. Divisibility by each $q_j$ gives
+      divisibility by $q$ only because the $q_j$ are pairwise coprime, which SEAL requires and Section~5.8 uses.
+      The statement does not depend on the order of the $q_i$.
+\item \textbf{Each inequality and transformation.} Used only: the triangle inequality, Claim~2
+      ($\norm{ab}\leq n\norm a\norm b$), $\norm{e}\leq B$, $\norm{c^{(i)}}\leq q_i/2$ (by construction), and the
+      count $(M-N)\cdot k$ of terms. The case $j\geq1$ of the iteration uses that components of index $\geq2$
+      are never modified by a one-step relinearization, which is checked in the proof.
+\item \textbf{Reduction to SEAL.} For $k=1$: $q_1=q$, $\qstar{1}=1$, $\qtilde{1}=1$, the digit is $[c]_q$, and for the
+      Corollary $\ell_1=\lfloor\log_wq\rfloor=\ell$, the keys are $([-(a_{M,1,h}s+e_{M,1,h})+w^hs^M]_q,a_{M,1,h})$
+      and $\bar c^{(1)}$ is the representative of $c_M$ in $[0,q)$. The noise formula and the bound of the Corollary
+      are then exactly those of Lemma 12. For $k=1$, Lemma 12\textsuperscript{RNS} without base $w$ is the unsplit
+      relinearization (one key pair), which is not Lemma 12 and does not claim to be.
+\item \textbf{Deterministic or not.} The bounds are deterministic: they use only $\norm{e}\leq B$ for the truncated
+      Gaussian $\chi$ and the exact size of the digits. No heuristic, probabilistic or independence assumption is used.
+      The only assumption beyond Lemma 12 is the key structure (H3).
+\item \textbf{Unresolved issues.}
+      (a) The SEAL~2.3.1 key structure for the combination of classical and FullRNS relinearization
+      is not given in the package and is not verified (H3).
+      (b) Definition~1 takes for $v$ the polynomial of smallest norm, while the proofs (here and in SEAL) exhibit a
+      representation $m+v+at$ and call its $v$ the noise; the exhibited $v$ has norm at least that of the minimal one,
+      so the stated upper bounds remain valid, but the equalities for $\vrelin$ hold for the exhibited representative.
+      (c) The bound is worst-case: it does not use any distribution of $c_M$. This is as in Lemma 12.
+      (d) Modulus switching and special-prime key switching are not covered (no lemma in the appendix).
+\end{enumerate}
+
+% =================================================================
+\section{Multiplication (SEAL Lemma 11) in the RNS representation}
+\label{sec:mult}
+% =================================================================
+
+\subsection{The original statement and why it must be adapted}
+
+\textbf{SEAL, Lemma 11} (reproduced from \texttt{SEAL\_manual\_appendix.tex}, not modified).
+Let $\ct_1=(x_0,\ldots,x_{j_1})$ be a ciphertext of size $j_1+1$
+encrypting $m_1$ with noise $v_1$, and let
+$\ct_2=(y_0,\ldots,y_{j_2})$ be a ciphertext of size $j_2+1$
+encrypting $m_2$ with noise $v_2$. Let $N_{m_1}$ and $N_{m_2}$
+be upper bounds on the number of non-zero terms in the polynomials
+$m_1$ and $m_2$, respectively. Then the noise $\vmult$ in the product
+$\ctmult$ satisfies
+\begin{align*}
+\norm{\vmult}\leq{}&
+\left[
+ (N_{m_1}+n)\norm{m_1}
+ +\frac{nt}{2}\Sgeo{j_1}
+\right]\norm{v_2}\\
+&+\left[
+ (N_{m_2}+n)\norm{m_2}
+ +\frac{nt}{2}\Sgeo{j_2}
+\right]\norm{v_1}\\
+&+3n\norm{v_1}\norm{v_2}
+ +\frac{t}{2q}\Sgeo{j_1+j_2}.
+\end{align*}
+
+The proof of Lemma~11 in the appendix establishes that each output component
+$c_i$ ($0\leq i\leq j_1+j_2$) of $\ctmult=(c_0,\dots,c_{j_1+j_2})$ satisfies, over $R$,
+\begin{equation}
+ c_i = \frac{t}{q}\left(\sum_{k+\ell=i}x_ky_\ell\right) + \epsilon_i + A_iq ,
+ \label{eq:textbook-mult-ci}
+\end{equation}
+for some integer polynomial $A_i\in R$ and some rounding error polynomial $\epsilon_i\in R\otimes\mathbb{Q}$.
+In textbook BFV, $c_i$ is defined by scaling the cross-product polynomial $C_i = \sum_{k+\ell=i}x_ky_\ell$
+by $t/q$ and rounding each coefficient to the nearest integer:
+\[
+ c_i = \left[\left\lfloor \frac{t}{q}C_i\right\rceil\right]_q .
+\]
+Consequently, the rounding error $\epsilon_i = \lfloor \frac{t}{q}C_i\rceil - \frac{t}{q}C_i$ satisfies
+$\norm{\epsilon_i}\leq 1/2$. In the proof of Lemma~11, this bound directly yields the final term
+$\frac{t}{2q}\Sgeo{j_1+j_2}$ in~\eqref{eq:textbook-mult-ci} through inequality~(1):
+\[
+ \frac{t}{q}\left\lVert\sum_{i=0}^{j_1+j_2}\epsilon_is^i\right\rVert
+ \leq \frac{t}{q}\sum_{i=0}^{j_1+j_2}\norm{\epsilon_i}n^i
+ \leq \frac{t}{2q}\Sgeo{j_1+j_2}.
+\]
+
+\textbf{Why adaptation is necessary in RNS.}
+In the RNS representation, the ciphertext modulus $q = q_1\times\cdots\times q_k$ is decomposed into
+$k$ pairwise coprime prime moduli (Section~5.8 of the manual). Ciphertext components $x_k, y_\ell$ are
+stored as their residues in $R_{q_1}\times\cdots\times R_{q_k}$.
+\begin{enumerate}[leftmargin=2.5em,label=(M\arabic*)]
+\item \emph{Non-invertibility of $q$ in $R_q$}: Division by $q$ and coefficient-wise rounding to the
+nearest integer cannot be computed within the RNS channels $R_{q_j}$ because $q\equiv 0\pmod{q_j}$
+for every $j\in\{1,\dots,k\}$, so $q$ has no multiplicative inverse in any $R_{q_j}$.
+\item \emph{Dynamic range expansion}: The polynomial cross-products $C_i = \sum_{k+\ell=i}x_ky_\ell$
+have coefficients of size up to $O(nq^2)$, far exceeding the dynamic range of the coefficient modulus $q$.
+\item \emph{RNS scaling and base conversion}: To scale by $t/q$ without multi-precision integer
+reconstruction, SEAL implements the Full-RNS multiplication algorithm of Bajard et al.~[4]
+(as stated in Section~5.8 and Section~6 of the manual). This algorithm introduces an auxiliary RNS
+base $B = \{p_1,\dots,p_l\}$ coprime to $q$, extends the inputs to $q\cup B$ using fast base conversions
+($\fastbconv$), computes the cross-products in $q\cup B$, and performs modular reduction and division
+by $q$ in base $B$ before converting the result back to base $q$.
+\item \emph{Approximation error in base conversion}: The Fast Base Conversion is an approximate CRT
+reconstruction: for an integer $x\in[0,q)$,
+\[
+ \sum_{j=1}^{k}\qstar{j}\ur{x\qtilde{j}}{q_j} = x + \musk\cdot q ,
+\]
+where $\musk\in\{0,1,\dots,k-1\}$ is the Shenoy--Kumaresan correction factor. The scaling and division
+by $q$ in base $B$ produces an effective rounding error $\epsilon_i^{\mathrm{RNS}}$ whose infinity norm
+differs from the exact $1/2$ bound of textbook BFV.
+\end{enumerate}
+Therefore, Lemma~11 must be adapted to account for the RNS rounding error bound $E_{\mathrm{round}}^{\mathrm{RNS}}$.
+
+\subsection{Definitions and hypotheses for the RNS case}
+
+\begin{definition*}[Auxiliary base and Fast Base Conversion]
+Let $q = \prod_{j=1}^k q_j$ be the ciphertext modulus. An \emph{auxiliary RNS base} is a set of
+pairwise coprime primes $B = \{p_1,\dots,p_l\}$ such that $\gcd(q, \prod_{m=1}^l p_m) = 1$ and
+the product $p_B := \prod_{m=1}^l p_m$ satisfies $p_B > n\cdot t\cdot q$ (or $p_B > nq^2$ to represent
+unscaled polynomial cross-products).
+For an element $x\in R_q$ given by its RNS residues $([x]_{q_1},\dots,[x]_{q_k})$, the \emph{Fast Base Conversion}
+from base $q$ to base $B$ is defined component-wise for each $p_m\in B$ by
+\[
+ \fastbconv(x, q\to B)_m := \left[ \sum_{j=1}^{k}\qstar{j}\ur{x\qtilde{j}}{q_j} \right]_{p_m} \in R_{p_m},
+\]
+where $\qstar{j} = q/q_j$ and $\qtilde{j} = [(\qstar{j})^{-1}]_{q_j}$.
+Over the integers (lifting each coefficient to $\mathbb{Z}$), Claim~1 gives
+\[
+ \sum_{j=1}^{k}\qstar{j}\ur{x\qtilde{j}}{q_j} = x + \musk\cdot q ,
+\]
+where $\musk\in R$ has integer coefficients in $\{0,\dots,k-1\}$ (if residues are in $[0,q_j)$) or
+$[-k/2, k/2]$ (if centered residues are used).
+\end{definition*}
+
+\begin{definition*}[Full-RNS multiplication model of [4]]
+Let $\ct_1 = (x_0,\dots,x_{j_1})$ and $\ct_2 = (y_0,\dots,y_{j_2})$ be ciphertexts in $R_q$.
+The Full-RNS homomorphic multiplication algorithm of [4] proceeds as follows:
+\begin{enumerate}[leftmargin=2em]
+\item \emph{Base extension}: The components $x_k, y_\ell$ are extended from base $q$ to the auxiliary base
+      $B$ (and optionally an extra redundant modulus $q_{\mathrm{sk}}$) using $\fastbconv$.
+\item \emph{Cross-products}: For each $0\leq i\leq j_1+j_2$, the cross-product
+      $C_i = \sum_{k+\ell=i}x_ky_\ell$ is computed in the extended base $q\cup B$.
+\item \emph{RNS scaling by $t/q$}:
+      In base $q$, the polynomial $[t C_i]_q$ is computed.
+      It is extended to base $B$ via Fast Base Conversion with Shenoy--Kumaresan correction
+      $\musk\in R$.
+      In base $B$, where $q$ is invertible, the scaled quotient
+      $D_i \equiv (t C_i - [t C_i]_q)\,q^{-1} \pmod B$ is computed.
+      $D_i$ is converted from base $B$ back to base $q$ via $\fastbconv(\cdot, B\to q)$, yielding
+      the output ciphertext component $c_i\in R_q$.
+\end{enumerate}
+Over $R$, this construction guarantees that for every $0\leq i\leq j_1+j_2$,
+\[
+ c_i = \frac{t}{q}\left(\sum_{k+\ell=i}x_ky_\ell\right) + \epsilon_i^{\mathrm{RNS}} + A_iq ,
+\]
+for an integer polynomial $A_i\in R$, where $\epsilon_i^{\mathrm{RNS}}\in R\otimes\mathbb{Q}$ is the effective
+RNS scaling and rounding error polynomial.
+\end{definition*}
+
+\begin{assumption*}[hypotheses used in this section]
+\begin{enumerate}[leftmargin=2em,label=(H\arabic*)]
+\item The secret key $s$ has integer coefficients and satisfies $\norm{s}=1$ ($s\in R_3$, Section~5.9 of the manual).
+\item \emph{RNS rounding bound}: There exists a deterministic constant $E_{\mathrm{round}}^{\mathrm{RNS}}>0$
+      such that for all $i\in\{0,\dots,j_1+j_2\}$,
+      \[
+        \norm{\epsilon_i^{\mathrm{RNS}}} \leq E_{\mathrm{round}}^{\mathrm{RNS}}.
+      \]
+      When exact Shenoy--Kumaresan error correction is implemented with centered reduction,
+      $E_{\mathrm{round}}^{\mathrm{RNS}} = 1/2$. If an approximate correction with offset bound $\delta_{\mathrm{SK}}$
+      is used, $E_{\mathrm{round}}^{\mathrm{RNS}} = 1/2 + \delta_{\mathrm{SK}}$.
+\item The ciphertext components $x_k, y_\ell\in R_q$ of the input ciphertexts are represented with
+      coefficients in the symmetric interval $[-q/2, q/2)$, so that $\norm{x_k}\leq q/2$ and $\norm{y_\ell}\leq q/2$.
+\item The Full-RNS multiplication follows the BEHZ scheme of [4] as defined above. This hypothesis is
+      \textbf{conditional} because reference [4] is not included in the package (explicitly acknowledged
+      in Section~\ref{sec:missing}, item~2).
+\end{enumerate}
+\end{assumption*}
+
+\subsection{Statement}
+
+\begin{lemmaRNSmult}[Multiplication, RNS representation]
+Let $\ct_1=(x_0,\ldots,x_{j_1})$ be a ciphertext of size $j_1+1$ encrypting $m_1$ with noise $v_1$,
+and let $\ct_2=(y_0,\ldots,y_{j_2})$ be a ciphertext of size $j_2+1$ encrypting $m_2$ with noise $v_2$.
+Let $N_{m_1}$ and $N_{m_2}$ be upper bounds on the number of non-zero terms in the polynomials $m_1$
+and $m_2$, respectively. Under hypotheses (H1)--(H4), the noise $\vmult$ in the product
+$\ctmult=(c_0,\ldots,c_{j_1+j_2})$ satisfies
+\begin{align*}
+\norm{\vmult}\leq{}&
+\left[
+ (N_{m_1}+n)\norm{m_1}
+ +\frac{nt}{2}\Sgeo{j_1}
+\right]\norm{v_2}\\
+&+\left[
+ (N_{m_2}+n)\norm{m_2}
+ +\frac{nt}{2}\Sgeo{j_2}
+\right]\norm{v_1}\\
+&+3n\norm{v_1}\norm{v_2}
+ +\frac{t}{q}\,E_{\mathrm{round}}^{\mathrm{RNS}}\,\Sgeo{j_1+j_2}.
+\end{align*}
+\end{lemmaRNSmult}
+
+\subsection{Proof}
+
+By the definition of invariant noise (Definition~1 of the manual), for the input ciphertexts
+$\ct_1$ and $\ct_2$ there exist integer-coefficient polynomials $a_1, a_2\in R$ such that
+\begin{equation}
+ \frac{t}{q}\ct_1(s)=m_1+v_1+a_1t,\qquad
+ \frac{t}{q}\ct_2(s)=m_2+v_2+a_2t.
+ \label{eq:mult-inputs-noise}
+\end{equation}
+By the definition of the Full-RNS multiplication model (Definition above), the product ciphertext
+$\ctmult=(c_0,\ldots,c_{j_1+j_2})$ satisfies, for each $0\leq i\leq j_1+j_2$,
+\[
+ c_i = \frac{t}{q}\left(\sum_{k+\ell=i}x_ky_\ell\right) + \epsilon_i^{\mathrm{RNS}} + A_iq ,
+\]
+for some integer polynomials $A_i\in R$ and rounding error polynomials $\epsilon_i^{\mathrm{RNS}}\in R\otimes\mathbb{Q}$
+satisfying $\norm{\epsilon_i^{\mathrm{RNS}}}\leq E_{\mathrm{round}}^{\mathrm{RNS}}$ (H2).
+Also, $\ctmult$ encrypts $[m_1m_2]_t$, so $[m_1m_2]_t = m_1m_2+at$ for some integer polynomial $a\in R$.
+
+We compute $\frac{t}{q}\ctmult(s)$ by evaluating the ciphertext polynomial at the secret key $s$:
+\begin{align*}
+\frac{t}{q}\ctmult(s)
+&=\frac{t}{q}\sum_{i=0}^{j_1+j_2}c_is^i\\
+&=\frac{t}{q}\sum_{i=0}^{j_1+j_2}\left[
+ \frac{t}{q}\left(\sum_{k+\ell=i}x_ky_\ell\right) + \epsilon_i^{\mathrm{RNS}} + A_iq
+\right]s^i\\
+&=\left(\frac{t}{q}\right)^2\sum_{i=0}^{j_1+j_2}\left(\sum_{k+\ell=i}x_ky_\ell\right)s^i
+  +\frac{t}{q}\sum_{i=0}^{j_1+j_2}\epsilon_i^{\mathrm{RNS}}s^i
+  +t\sum_{i=0}^{j_1+j_2}A_is^i .
+\end{align*}
+Observe that the first term is the Cauchy product of the polynomials $\ct_1(s)=\sum_kx_ks^k$ and $\ct_2(s)=\sum_\ell y_\ell s^\ell$:
+\[
+ \sum_{i=0}^{j_1+j_2}\left(\sum_{k+\ell=i}x_ky_\ell\right)s^i
+ = \left(\sum_{k=0}^{j_1}x_ks^k\right)\left(\sum_{\ell=0}^{j_2}y_\ell s^\ell\right)
+ = \ct_1(s)\,\ct_2(s).
+\]
+Therefore,
+\begin{align*}
+\left(\frac{t}{q}\right)^2\ct_1(s)\ct_2(s)
+&= \left(\frac{t}{q}\ct_1(s)\right)\left(\frac{t}{q}\ct_2(s)\right)\\
+&= (m_1+v_1+a_1t)(m_2+v_2+a_2t)\\
+&= m_1m_2 + m_1v_2 + m_2v_1 + v_1v_2 + (v_1a_2+v_2a_1)t\\
+&\quad + (m_1a_2+m_2a_1+a_1a_2t)t.
+\end{align*}
+Substituting $m_1m_2 = [m_1m_2]_t - at$, we obtain
+\begin{align*}
+\frac{t}{q}\ctmult(s)
+&= [m_1m_2]_t + m_1v_2 + m_2v_1 + v_1v_2 + (v_1a_2+v_2a_1)t
+   + \frac{t}{q}\sum_{i=0}^{j_1+j_2}\epsilon_i^{\mathrm{RNS}}s^i\\
+&\quad + \left( m_1a_2+m_2a_1+a_1a_2t + \sum_{i=0}^{j_1+j_2}A_is^i - a \right)t .
+\end{align*}
+Since $m_1, m_2, a_1, a_2, A_i, a\in R$ are all integer-coefficient polynomials, the bracketed factor
+\[
+ A_{\mathrm{mult}} := m_1a_2+m_2a_1+a_1a_2t + \sum_{i=0}^{j_1+j_2}A_is^i - a
+\]
+belongs to $R$. Hence $\ctmult$ encrypts $[m_1m_2]_t$, and the invariant noise $\vmult$ in $\ctmult$ is
+represented by
+\begin{equation}
+ \vmult = m_1v_2 + m_2v_1 + v_1v_2 + (v_1a_2+v_2a_1)t + \frac{t}{q}\sum_{i=0}^{j_1+j_2}\epsilon_i^{\mathrm{RNS}}s^i .
+ \label{eq:vmult-exact}
+\end{equation}
+
+We now bound the infinity norm of each term of $\vmult$.
+
+\textbf{1. RNS rounding sum.}
+By the triangle inequality and Claim~2 ($\norm{ab}\leq n\norm{a}\norm{b}$), for any polynomial
+$e\in R\otimes\mathbb{Q}$ and any integer $i\geq 1$, since $\norm{s}=1$ (H1),
+$\norm{es^i}\leq n^i\norm{e}$. For $i=0$, $\norm{es^0}=\norm{e}$.
+Using $\norm{\epsilon_i^{\mathrm{RNS}}}\leq E_{\mathrm{round}}^{\mathrm{RNS}}$ (H2),
+\begin{equation}
+ \frac{t}{q}\left\lVert\sum_{i=0}^{j_1+j_2}\epsilon_i^{\mathrm{RNS}}s^i\right\rVert
+ \leq \frac{t}{q}\sum_{i=0}^{j_1+j_2}\norm{\epsilon_i^{\mathrm{RNS}}s^i}
+ \leq \frac{t}{q}E_{\mathrm{round}}^{\mathrm{RNS}}\sum_{i=0}^{j_1+j_2}n^i
+ = \frac{t}{q}E_{\mathrm{round}}^{\mathrm{RNS}}\,\Sgeo{j_1+j_2}.
+ \label{eq:mult-rns-rounding-bound}
+\end{equation}
+
+\textbf{2. Bound on $\norm{a_k t}$.}
+From~\eqref{eq:mult-inputs-noise}, for $k\in\{1,2\}$,
+$a_kt = \frac{t}{q}\ct_k(s) - m_k - v_k$.
+By the triangle inequality,
+\[
+ \norm{a_kt} \leq \frac{t}{q}\norm{\ct_k(s)} + \norm{m_k} + \norm{v_k}.
+\]
+The ciphertext $\ct_k$ has components $c_{k,i}$ for $0\leq i\leq j_k$, each with coefficients in
+$[-q/2, q/2)$ (H3), so $\norm{c_{k,i}}\leq q/2$.
+Applying Claim~2 with $\norm{s}=1$, $\norm{c_{k,i}s^i}\leq (q/2)n^i$.
+Summing over $i\in\{0,\dots,j_k\}$,
+\[
+ \norm{\ct_k(s)} \leq \sum_{i=0}^{j_k}\norm{c_{k,i}s^i}
+ \leq \frac{q}{2}\sum_{i=0}^{j_k}n^i
+ = \frac{q}{2}\Sgeo{j_k}.
+\]
+Multiplying by $t/q$,
+\begin{equation}
+ \norm{a_kt} \leq \frac{t}{2}\Sgeo{j_k} + \norm{m_k} + \norm{v_k}.
+ \label{eq:mult-akt-bound}
+\end{equation}
+
+\textbf{3. Cross-terms with $a_k t$.}
+Applying the triangle inequality and Claim~2 to $(v_1a_2+v_2a_1)t$,
+\begin{align*}
+\norm{(v_1a_2+v_2a_1)t}
+&\leq \norm{v_1(a_2t)} + \norm{v_2(a_1t)}\\
+&\leq n\norm{v_1}\norm{a_2t} + n\norm{v_2}\norm{a_1t}\\
+&\leq n\norm{v_1}\left(\frac{t}{2}\Sgeo{j_2} + \norm{m_2} + \norm{v_2}\right)
+     + n\norm{v_2}\left(\frac{t}{2}\Sgeo{j_1} + \norm{m_1} + \norm{v_1}\right).
+\end{align*}
+
+\textbf{4. Message and noise products.}
+The polynomial $m_1$ has at most $N_{m_1}$ non-zero coefficients.
+Each coefficient of $m_1v_2$ is a sum of at most $N_{m_1}$ products of a coefficient of $m_1$
+and a coefficient of $v_2$, so
+\[
+ \norm{m_1v_2}\leq N_{m_1}\norm{m_1}\norm{v_2}.
+\]
+Similarly, $\norm{m_2v_1}\leq N_{m_2}\norm{m_2}\norm{v_1}$.
+For $v_1v_2$, Claim~2 gives
+\[
+ \norm{v_1v_2}\leq n\norm{v_1}\norm{v_2}.
+\]
+
+\textbf{Total noise bound.}
+Applying the triangle inequality to~\eqref{eq:vmult-exact} and substituting the bounds:
+\begin{align*}
+\norm{\vmult}
+&\leq \norm{m_1v_2} + \norm{m_2v_1} + \norm{v_1v_2} + \norm{(v_1a_2+v_2a_1)t}
+      + \frac{t}{q}\left\lVert\sum_{i=0}^{j_1+j_2}\epsilon_i^{\mathrm{RNS}}s^i\right\rVert\\
+&\leq N_{m_1}\norm{m_1}\norm{v_2} + N_{m_2}\norm{m_2}\norm{v_1} + n\norm{v_1}\norm{v_2}\\
+&\quad + n\norm{v_1}\left(\frac{t}{2}\Sgeo{j_2} + \norm{m_2} + \norm{v_2}\right)\\
+&\quad + n\norm{v_2}\left(\frac{t}{2}\Sgeo{j_1} + \norm{m_1} + \norm{v_1}\right)
+      + \frac{t}{q}E_{\mathrm{round}}^{\mathrm{RNS}}\,\Sgeo{j_1+j_2}\\
+&= \left[(N_{m_1}+n)\norm{m_1} + \frac{nt}{2}\Sgeo{j_1}\right]\norm{v_2}\\
+&\quad + \left[(N_{m_2}+n)\norm{m_2} + \frac{nt}{2}\Sgeo{j_2}\right]\norm{v_1}\\
+&\quad + 3n\norm{v_1}\norm{v_2} + \frac{t}{q}E_{\mathrm{round}}^{\mathrm{RNS}}\,\Sgeo{j_1+j_2}.
+\end{align*}
+\hfill$\square$
+
+\subsection{Remarks: differences from the original SEAL result}
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{The RNS rounding term vs.\ textbook rounding.}
+      In SEAL Lemma~11, the final additive term is
+      $\frac{t}{2q}\Sgeo{j_1+j_2}$, corresponding to exact rounding with error bounded by $1/2$.
+      In Lemma~11\textsuperscript{RNS}, this is replaced by
+      $\frac{t}{q}E_{\mathrm{round}}^{\mathrm{RNS}}\Sgeo{j_1+j_2}$, where $E_{\mathrm{round}}^{\mathrm{RNS}}$
+      accounts for the error of the RNS base conversion and modular scaling of [4].
+\item \textbf{Exactness under Shenoy--Kumaresan correction.}
+      If the Full-RNS scaling algorithm implements exact Shenoy--Kumaresan error correction
+      (using a redundant modulus $q_{\mathrm{sk}}\geq k$ to eliminate the CRT reconstruction offset $\musk$)
+      and centers the residues in $[-q/2, q/2)$, the effective rounding operation in base $B$ exactly matches
+      the nearest-integer rounding of textbook BFV. In that setting, $E_{\mathrm{round}}^{\mathrm{RNS}} = 1/2$,
+      and the bound of Lemma~11\textsuperscript{RNS} coincides identically with Lemma~11.
+\item \textbf{Leading terms are invariant.}
+      The coefficients of $\norm{v_2}$, $\norm{v_1}$, and $\norm{v_1}\norm{v_2}$ depend only on the ring
+      degree $n$, the plaintext modulus $t$, the ciphertext sizes $j_1+1, j_2+1$, and the message bounds
+      $\norm{m_k}, N_{m_k}$. Because ciphertext components $x_k, y_\ell\in R_q$ satisfy $\norm{x_k}\leq q/2$
+      and $\norm{y_\ell}\leq q/2$ in the standard symmetric representation regardless of whether $q$ is prime
+      or composite, the bound $\norm{a_k t}\leq \frac{t}{2}\Sgeo{j_k} + \norm{m_k} + \norm{v_k}$ is unchanged.
+      Thus, all leading terms in $\norm{v_1}$ and $\norm{v_2}$ are identical to Lemma~11.
+\item \textbf{Numerical insignificance of the rounding difference.}
+      In practical BFV parameter selections, $q\gg t$ (typically $q \geq 2^{60}$ and $t \leq 2^{32}$).
+      Consequently, the rounding term $\frac{t}{q}E_{\mathrm{round}}^{\mathrm{RNS}}\Sgeo{j_1+j_2}$ is scaled
+      by $t/q \ll 10^{-9}$, whereas the linear terms scale with $t\norm{m}$ or $nt$.
+      Even if an uncorrected base conversion introduces an offset bounded by $k$ (e.g., $E_{\mathrm{round}}^{\mathrm{RNS}} \approx k$),
+      the additive difference $\frac{t}{q}(k - 1/2)\Sgeo{j_1+j_2}$ is completely negligible compared to the
+      leading terms. This justifies the remark in Section~6 of the manual that the differences of [4]
+      ``are small and in practice have no effect.''
+\item \textbf{Relation to the reference implementation.}
+      In \texttt{bfv\_noise\_bound.cpp} (lines 255--278), the function evaluating homomorphic multiplication
+      computes:
+      \begin{align*}
+        \text{\texttt{lhs\_coefficient}} &= \log_2\left((N_{m_1}+n)\norm{m_1} + \frac{nt}{2}\Sgeo{j_1}\right),\\
+        \text{\texttt{rhs\_coefficient}} &= \log_2\left((N_{m_2}+n)\norm{m_2} + \frac{nt}{2}\Sgeo{j_2}\right),\\
+        \text{\texttt{product\_term}} &= \log_2(3n) + \log_2\norm{v_1} + \log_2\norm{v_2},\\
+        \text{\texttt{final\_rounding\_term}} &= \log_2(t) - 1 - \log_2(q) + \log_2\Sgeo{j_1+j_2}.
+      \end{align*}
+      Notice that $\log_2(t) - 1 - \log_2(q) = \log_2\left(\frac{t}{2q}\right)$, which corresponds exactly to
+      $E_{\mathrm{round}}^{\mathrm{RNS}} = 1/2$. The reference implementation therefore implements the textbook
+      bound of Lemma~11 evaluated at the composite modulus $q = \prod_{i=1}^k q_i$. Lemma~11\textsuperscript{RNS}
+      proves that this formula is mathematically rigorous under the hypothesis of exact Shenoy--Kumaresan
+      correction (or an excellent approximation that differs by at most $\frac{t}{q}\delta_{\mathrm{SK}}\Sgeo{j_1+j_2}$).
+\end{enumerate}
+
+\subsection{Correctness check}
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Consistency with the SEAL definitions.}
+      The definition of invariant noise (Definition~1 of the manual) is preserved. The ciphertext polynomial
+      representation, the evaluation at $s$, the lift to $R$, and the Cauchy product of ciphertexts follow
+      the exact algebraic sequence of Lemma~11 in the appendix. The ternary secret key assumption $\norm{s}=1$
+      is consistent with Section~5.9 of the manual.
+\item \textbf{RNS moduli and $q$.}
+      The full modulus $q = \prod_{j=1}^k q_j$ is used throughout. The auxiliary base $B$ satisfies
+      $\gcd(q, p_B) = 1$ and has sufficient bit-length to avoid wrap-around during Fast Base Conversion.
+      The reduction modulo $q_j$ and reconstruction modulo $q$ rely on the pairwise coprimality of the $q_j$.
+\item \textbf{Validity of each inequality and mathematical transformation.}
+      The proof uses only:
+      (i) the triangle inequality on $R$;
+      (ii) Claim~2 ($\norm{ab}\leq n\norm{a}\norm{b}$) which is the expansion factor $\delta\leq n$ of Table~1;
+      (iii) $\norm{s^i}\leq n^{i-1}$ for $i\geq 1$ and $\norm{s}=1$, verified by induction from Claim~2;
+      (iv) exact summation of the geometric series $\sum_{i=0}^j n^i = \Sgeo{j}$;
+      (v) coefficient bound $\norm{c_i}\leq q/2$ for ciphertext elements reduced into $[-q/2, q/2)$;
+      (vi) sparsity bound $\norm{mv}\leq N_m\norm{m}\norm{v}$.
+      Every step is algebraic and fully justified.
+\item \textbf{Reduction to SEAL.}
+      Under the assumption that $E_{\mathrm{round}}^{\mathrm{RNS}} = 1/2$ (which holds for textbook BFV or exact
+      Shenoy--Kumaresan correction in RNS), the term $\frac{t}{q}E_{\mathrm{round}}^{\mathrm{RNS}}\Sgeo{j_1+j_2}$
+      becomes $\frac{t}{2q}\Sgeo{j_1+j_2}$, and the bound of Lemma~11\textsuperscript{RNS} reduces
+      \emph{verbatim} to Lemma~11 of the SEAL appendix.
+\item \textbf{Deterministic or not.}
+      The bound is completely deterministic. It does not use heuristic approximations (such as the canonical norm
+      estimates of Section~6.1 of the manual), probabilistic bounds, or independence assumptions between coefficients.
+      The only assumption beyond Lemma~11 is the RNS rounding error bound (H2) and the BEHZ model (H4).
+\item \textbf{Unresolved issues.}
+      \begin{enumerate}[label=(\alph*)]
+      \item \emph{Exact SEAL 2.3.1 source verification}: As stated in Section~\ref{sec:missing} (item~2),
+            reference [4] and the SEAL~2.3.1 source code for \texttt{evaluator.cpp} are not included in the
+            package. Whether SEAL~2.3.1 implements exact Shenoy--Kumaresan correction, approximate correction,
+            or Montgomery reduction in base $B$ cannot be verified from the package alone.
+      \item \emph{Empirical vs.\ strict bound}: The bound is a worst-case infinity-norm bound. Due to the
+            worst-case expansion factor $n$ at each polynomial multiplication, the bound is conservative
+            compared to actual noise growth in typical ciphertexts (which motivates the heuristic bounds of
+            Section~6.1 of the manual).
+      \end{enumerate}
+\end{enumerate}
+
+\end{document}

@@ -1,0 +1,2 @@
+cd "C:\Users\Nazne\PFE\CHEHAB\CHEHAB_noise\chehab-unified\RL\Noise_bounds_proofs\lean_proofs"
+powershell -ExecutionPolicy Bypass -File .\build_all.ps1

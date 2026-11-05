@@ -1,0 +1,7 @@
+Agent,B=230 Safe CR%,B=236 Safe CR%,B=369 Safe CR%,B=9M Safe CR%,Average Safe CR%,Safe Violations
+Unconstrained,87.23,87.23,71.59,66.08,78.03,0 (0.0%)
+V4 Margin Barrier,84.41,85.89,65.86,58.78,73.74,0 (0.0%)
+V4 Noise Masking,86.68,86.87,65.7,56.64,73.97,0 (0.0%)
+V4 MB + FiLM,83.32,83.94,63.91,56.9,72.02,0 (0.0%)
+V5 FOCOPS + NATO-SC,84.52,85.18,69.81,63.37,75.72,0 (0.0%)
+V5 Lag-PID + NATO-SC,86.52,86.55,71.5,65.29,77.46,0 (0.0%)

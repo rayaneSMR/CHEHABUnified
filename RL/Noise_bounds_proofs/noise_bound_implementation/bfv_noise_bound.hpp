@@ -69,6 +69,7 @@ namespace seal_backend
     Ptr rhs_;
     BFVPlaintextBound plain_;
 
+    friend class BFVNoiseBound;
     friend class BFVNoiseEstimator;
   };
 
@@ -81,10 +82,10 @@ namespace seal_backend
     bool decryptable = false;
   };
 
-  class BFVNoiseEstimator
+  class BFVNoiseBound
   {
   public:
-    explicit BFVNoiseEstimator(const seal::SEALContext &context, std::uint64_t error_coefficient_bound = 21);
+    explicit BFVNoiseBound(const seal::SEALContext &context, std::uint64_t error_coefficient_bound = 21);
 
     BFVNoiseEstimate BFV_noise_bound(const BFVNoiseExpression::Ptr &expression) const;
 
@@ -96,5 +97,7 @@ namespace seal_backend
     const seal::SEALContext &context_;
     std::uint64_t error_coefficient_bound_;
   };
+
+  using BFVNoiseEstimator = BFVNoiseBound;
 }
 }

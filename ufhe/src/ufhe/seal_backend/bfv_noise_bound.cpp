@@ -1,4 +1,4 @@
-#include "ufhe/seal_backend/bfv_noise_estimator.hpp"
+#include "ufhe/seal_backend/bfv_noise_bound.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -149,14 +149,14 @@ namespace seal_backend
       new BFVNoiseExpression(BFVNoiseOperation::mod_switch, std::move(operand), nullptr, {}));
   }
 
-  struct BFVNoiseEstimator::State
+  struct BFVNoiseBound::State
   {
     long double log_noise = negative_infinity;
     std::size_t ciphertext_size = 0;
     std::size_t modulus_level = 0;
   };
 
-  BFVNoiseEstimator::BFVNoiseEstimator(const seal::SEALContext &context, std::uint64_t error_coefficient_bound)
+  BFVNoiseBound::BFVNoiseBound(const seal::SEALContext &context, std::uint64_t error_coefficient_bound)
     : context_(context), error_coefficient_bound_(error_coefficient_bound)
   {
     if (!context_.parameters_set())
@@ -167,7 +167,7 @@ namespace seal_backend
       throw std::invalid_argument("error coefficient bound must be positive");
   }
 
-  BFVNoiseEstimator::State BFVNoiseEstimator::evaluate(const BFVNoiseExpression::Ptr &expression) const
+  BFVNoiseBound::State BFVNoiseBound::evaluate(const BFVNoiseExpression::Ptr &expression) const
   {
     if (!expression)
       throw std::invalid_argument("noise expression is null");
@@ -313,7 +313,7 @@ namespace seal_backend
     throw std::logic_error("unsupported BFV noise operation");
   }
 
-  BFVNoiseEstimate BFVNoiseEstimator::BFV_noise_bound(const BFVNoiseExpression::Ptr &expression) const
+  BFVNoiseEstimate BFVNoiseBound::BFV_noise_bound(const BFVNoiseExpression::Ptr &expression) const
   {
     State state = evaluate(expression);
     auto context_data = context_.first_context_data();

@@ -1,4 +1,4 @@
-#include "ufhe/seal_backend/bfv_noise_estimator.hpp"
+#include "ufhe/seal_backend/bfv_noise_bound.hpp"
 
 #include "seal/seal.h"
 #include <cstddef>
@@ -157,7 +157,7 @@ namespace
     seal::Evaluator evaluator(context);
     seal::Decryptor decryptor(context, key_generator.secret_key());
     seal::BatchEncoder encoder(context);
-    ufhe::seal_backend::BFVNoiseEstimator estimator(context);
+    ufhe::seal_backend::BFVNoiseBound estimator(context);
     TrackedCiphertext result = program(parameters, encoder, encryptor, evaluator, relin_keys, galois_keys);
     return {name, vector_size, parameters.poly_modulus_degree(),
             context.first_context_data()->total_coeff_modulus_bit_count() - parameters.plain_modulus().bit_count(),
@@ -253,7 +253,7 @@ namespace
     seal::Evaluator evaluator(context);
     seal::Decryptor decryptor(context, key_generator.secret_key());
     seal::BatchEncoder encoder(context);
-    ufhe::seal_backend::BFVNoiseEstimator estimator(context);
+    ufhe::seal_backend::BFVNoiseBound estimator(context);
 
     seal::Plaintext plain_one = encode_constant(encoder, 1);
     seal::Plaintext plain_zero = encode_constant(encoder, 0);
@@ -308,7 +308,7 @@ namespace
     seal::Evaluator evaluator(context);
     seal::Decryptor decryptor(context, key_generator.secret_key());
     seal::BatchEncoder encoder(context);
-    ufhe::seal_backend::BFVNoiseEstimator estimator(context);
+    ufhe::seal_backend::BFVNoiseBound estimator(context);
 
     seal::Plaintext plain_one = encode_constant(encoder, 1);
     seal::Plaintext plain_two = encode_constant(encoder, 2);
@@ -357,7 +357,7 @@ namespace
     seal::Evaluator evaluator(context);
     seal::Decryptor decryptor(context, key_generator.secret_key());
     seal::BatchEncoder encoder(context);
-    ufhe::seal_backend::BFVNoiseEstimator estimator(context);
+    ufhe::seal_backend::BFVNoiseBound estimator(context);
 
     seal::Plaintext plain_one = encode_constant(encoder, 1);
     seal::Ciphertext row;

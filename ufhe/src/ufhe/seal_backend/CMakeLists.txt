@@ -1,5 +1,5 @@
 set(UFHE_SOURCE_FILES ${UFHE_SOURCE_FILES}
-    ${CMAKE_CURRENT_LIST_DIR}/bfv_noise_estimator.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/bfv_noise_bound.cpp
     ${CMAKE_CURRENT_LIST_DIR}/coeff_modulus.cpp
     ${CMAKE_CURRENT_LIST_DIR}/batch_encoder.cpp
     ${CMAKE_CURRENT_LIST_DIR}/ciphertext.cpp
@@ -20,7 +20,7 @@ set(UFHE_SOURCE_FILES ${UFHE_SOURCE_FILES}
 )
 
 set(UFHESEALBACCKED_HEADER_FILES ${UFHESEALBACCKED_HEADER_FILES}
-    ${CMAKE_CURRENT_LIST_DIR}/bfv_noise_estimator.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/bfv_noise_bound.hpp
     ${CMAKE_CURRENT_LIST_DIR}/coeff_modulus.hpp
     ${CMAKE_CURRENT_LIST_DIR}/batch_encoder.hpp
     ${CMAKE_CURRENT_LIST_DIR}/ciphertext.hpp
