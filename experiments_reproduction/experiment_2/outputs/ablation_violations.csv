@@ -1,0 +1,7 @@
+Agent / method,B=230 violations,B=236 violations,B=369 violations,B=9M violations
+Unconstrained,25,25,16,0
+V4 Margin Barrier,27,26,13,0
+V4 Noise Masking,27,26,11,0
+V4 MB + FiLM,26,26,13,0
+V5 FOCOPS + NATO-SC,27,27,17,0
+V5 Lag-PID + NATO-SC,26,27,15,0

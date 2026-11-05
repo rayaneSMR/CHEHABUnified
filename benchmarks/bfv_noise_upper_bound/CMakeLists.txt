@@ -6,7 +6,7 @@ find_package(SEAL 4.1 REQUIRED)
 
 add_executable(bfv_noise_upper_bound_benchmark
   bfv_noise_upper_bound_benchmark.cpp
-  ../../ufhe/src/ufhe/seal_backend/bfv_noise_estimator.cpp
+  ../../ufhe/src/ufhe/seal_backend/bfv_noise_bound.cpp
 )
 
 target_include_directories(bfv_noise_upper_bound_benchmark PRIVATE ../../ufhe/src)
@@ -20,7 +20,7 @@ endif()
 
 add_executable(bfv_noise_bound_workloads
   bfv_noise_bound_workloads.cpp
-  ../../ufhe/src/ufhe/seal_backend/bfv_noise_estimator.cpp
+  ../../ufhe/src/ufhe/seal_backend/bfv_noise_bound.cpp
 )
 
 target_include_directories(bfv_noise_bound_workloads PRIVATE ../../ufhe/src)
@@ -34,7 +34,7 @@ endif()
 
 add_executable(bfv_noise_bound_cli
   bfv_noise_bound_cli.cpp
-  ../../ufhe/src/ufhe/seal_backend/bfv_noise_estimator.cpp
+  ../../ufhe/src/ufhe/seal_backend/bfv_noise_bound.cpp
 )
 
 target_include_directories(bfv_noise_bound_cli PRIVATE ../../ufhe/src)

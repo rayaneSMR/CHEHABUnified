@@ -1,0 +1,9 @@
+Feature,Pearson r
+Multiplicative depth,0.999398
+Expression depth,0.438680
+Negations,-0.022430
+Additions,0.186608
+Subtractions,-0.005696
+Plaintext multiplications,-0.000396
+Ciphertext multiplications,0.531268
+Rotations,

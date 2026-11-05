@@ -1,0 +1,4 @@
+Agent,B=230 CR%,B=236 CR%,B=369 CR%,B=9M CR%
+Unconstrained,87.2272,87.2272,68.0227,57.2352
+Constrained (Lag-PID + NATO-SC),86.4458,81.2021,63.7471,65.0313
+(expressions in subset),43.0000,43.0000,59.0000,69.0000

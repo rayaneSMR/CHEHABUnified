@@ -1,0 +1,3 @@
+subset,rows,underestimated (n),underestimated (%),overestimated (n),overestimated (%),mean signed error (est - measured),max underestimation (bits),max overestimation (bits),rows underestimated by > 5 bits
+all rows,15824,11462,72.434277,4362,27.565723,-0.901583,7.802011,94.928241,427
+excluding budget-exhausted rows,15822,11462,72.443433,4360,27.556567,-0.911511,7.802011,28.359893,427

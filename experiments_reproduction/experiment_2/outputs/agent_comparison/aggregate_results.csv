@@ -1,0 +1,9 @@
+Agent,Budget,Average CR%,Violation count,Violation rate (%)
+Unconstrained,230,57.2352,25,36.2319
+Constrained (Lag-PID + NATO-SC),230,60.4910,26,37.6812
+Unconstrained,236,57.2352,25,36.2319
+Constrained (Lag-PID + NATO-SC),236,62.0707,27,39.1304
+Unconstrained,369,57.2352,16,23.1884
+Constrained (Lag-PID + NATO-SC),369,55.8686,15,21.7391
+Unconstrained,9M,57.2352,0,0.0000
+Constrained (Lag-PID + NATO-SC),9M,65.0313,0,0.0000

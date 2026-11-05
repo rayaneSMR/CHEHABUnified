@@ -1,0 +1,130 @@
+\paragraph{Notation}
+
+We use $\lfloor \cdot \rfloor$, $\lceil \cdot \rceil$, and
+$\lfloor \cdot \rceil$ to denote rounding down, up, and to the
+nearest integer, respectively. When these operations are applied
+to a polynomial, we mean performing the corresponding operation
+to each coefficient separately. The norm $\|\cdot\|$ denotes the
+infinity norm and $\|\cdot\|_{\mathrm{can}}$ denotes the canonical
+norm. We denote the reduction of an integer modulo
+$t$ by $[\cdot]_t$. This operation can also be applied to
+polynomials, in which case it is applied to every integer
+coefficient separately. The reductions are always done into the
+symmetric interval $[-t/2,t/2)$.
+$\log_a$ denotes the base-$a$ logarithm, and $\log$ always denotes
+the base-2 logarithm. Table~1 below lists commonly used parameters,
+and in some cases their corresponding names in SEAL 2.3.1.
+
+\begin{table}[ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{|c|p{8.2cm}|p{3.5cm}|}
+\hline
+\textbf{Parameter} & \textbf{Description} &
+\textbf{Name in SEAL (if applicable)} \\
+\hline
+
+$q$ &
+Modulus in the ciphertext space (coefficient modulus) of the
+form $q_1 \times \cdots \times q_k$, where $q_i$ are prime
+&
+\texttt{coeff\_modulus}
+\\
+\hline
+
+$t$ &
+Modulus in the plaintext space (plaintext modulus)
+&
+\texttt{plain\_modulus}
+\\
+\hline
+
+$n$ &
+A power of 2
+&
+\\
+\hline
+
+$x^n+1$ &
+The polynomial modulus which specifies the ring $R$
+&
+\texttt{poly\_modulus}
+\\
+\hline
+
+$R$ &
+The ring $\mathbb{Z}[x]/(x^n+1)$
+&
+\\
+\hline
+
+$R_a$ &
+The ring $\mathbb{Z}_a[x]/(x^n+1)$, i.e. same as the ring $R$
+but with coefficients reduced modulo $a$
+&
+\\
+\hline
+
+$w$ &
+A base into which ciphertext elements are decomposed during
+relinearization
+&
+\\
+\hline
+
+$\log w$ &
+&
+\texttt{decomposition\_bit\_count}
+\\
+\hline
+
+$\ell$ &
+There are $\ell+1=\lfloor\log_w q\rfloor+1$ elements in each
+component of each evaluation key
+&
+\\
+\hline
+
+$\delta$ &
+Expansion factor in the ring $R$ ($\delta \leq n$)
+&
+\\
+\hline
+
+$\Delta$ &
+Quotient on division of $q$ by $t$, or $\lfloor q/t\rfloor$
+&
+\\
+\hline
+
+$r_t(q)$ &
+Remainder on division of $q$ by $t$, i.e.
+$q=\Delta t+r_t(q)$, where $0\leq r_t(q)<t$
+&
+\\
+\hline
+
+$\chi$ &
+Error distribution (a truncated discrete Gaussian distribution)
+&
+\\
+\hline
+
+$\sigma$ &
+Standard deviation of $\chi$
+&
+\texttt{noise\_standard\_deviation}
+\\
+\hline
+
+$B$ &
+Bound on the distribution $\chi$
+&
+\texttt{noise\_max\_deviation}
+\\
+\hline
+
+\end{tabular}
+\caption{Notation used throughout this document.}
+\label{tab:notation}
+\end{table}

@@ -1,0 +1,29 @@
+{
+  "experiment": "Experiment 3 - Safety Rollback & Synthetic Near-Threshold Benchmark",
+  "timestamp_utc": "2026-11-03T11:12:14.331327+00:00",
+  "elapsed_seconds": 5.39,
+  "platform": "Windows-11-10.0.26200-SP0",
+  "python_version": "3.12.4 (tags/v3.12.4:8e8a4ba, Jun  6 2024, 19:30:16) [MSC v.1940 64 bit (AMD64)]",
+  "torch_version": "2.7.1+cu118",
+  "agent": "fheEnvUnified (4th RL Agent - Multi-Objective + Noise Constraint)",
+  "synthetic_benchmark": {
+    "expressions_count": 60,
+    "seed": 7777,
+    "budgets": [
+      230,
+      236,
+      369
+    ]
+  },
+  "audit": {
+    "total_episodes": 360,
+    "mismatches": 0,
+    "concordance_rate": 1.0
+  },
+  "threshold_safe_cr": {
+    "constrained_lagpid_avg": 37.96,
+    "unconstrained_avg": 34.03,
+    "advantage_pp": 3.93
+  },
+  "original_ablation_lagpid_safe_cr_avg": 77.46
+}

@@ -69,3 +69,4 @@ docs/
 RL/fhe_rl/datasets/cryptonets.txt
 RL/fhe_rl/datasets/dnn_full_benchmarks.txt
 RL/fhe_rl/datasets/full_dnn.txt
+context/

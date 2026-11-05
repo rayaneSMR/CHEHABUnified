@@ -1,0 +1,5 @@
+Budget,Total expressions,Initially within budget: count,Initially within budget: %,Initially above budget: count,Initially above budget: %,"Within-budget violations, unconstrained: count","Within-budget violations, unconstrained: %","Within-budget violations, constrained: count","Within-budget violations, constrained: %"
+230,69,43,62.3188,26,37.6812,0,0.0000,0,0.0000
+236,69,43,62.3188,26,37.6812,0,0.0000,1,2.3256
+369,69,59,85.5072,10,14.4928,6,10.1695,5,8.4746
+9M,69,69,100.0000,0,0.0000,0,0.0000,0,0.0000

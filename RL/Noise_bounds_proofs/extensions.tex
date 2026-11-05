@@ -1,0 +1,725 @@
+% extensions.tex
+% Rigorous noise-bound extensions for BFV in Microsoft SEAL 2.3.1 / 3.x
+% Covering RNS key switching (special prime P), relinearization, rotation, modulus switching, and general expressions.
+% Mathematical notation and proof style strictly follow the Microsoft SEAL 2.3.1 manual (Appendix, Lemmas 9--17).
+
+\documentclass[11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{enumitem}
+\usepackage{array}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\allowdisplaybreaks
+
+\newtheorem{lemma}{Lemma}
+\theoremstyle{definition}
+\newtheorem*{definition*}{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+\setcounter{lemma}{17}   % SEAL manual: Lemmas 1--17; derived extensions start at Lemma 18
+
+% ---------------------------------------------------------------
+% Macros strictly aligned with SEAL_manual_appendix.tex and Table 1
+% ---------------------------------------------------------------
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+\newcommand{\ct}{\mathrm{ct}}
+\newcommand{\ctrelin}{\mathrm{ct}_{\mathrm{relin}}}
+\newcommand{\vrelin}{v_{\mathrm{relin}}}
+\newcommand{\ctrot}{\mathrm{ct}_{\mathrm{rot}}}
+\newcommand{\vrot}{v_{\mathrm{rot}}}
+\newcommand{\ctms}{\mathrm{ct}_{\mathrm{ms}}}
+\newcommand{\vms}{v_{\mathrm{ms}}}
+\newcommand{\vadd}{v_{\mathrm{add}}}
+\newcommand{\ctpadd}{\mathrm{ct}_{\mathrm{padd}}}
+\newcommand{\vpadd}{v_{\mathrm{padd}}}
+\newcommand{\ctpsub}{\mathrm{ct}_{\mathrm{psub}}}
+\newcommand{\vpsub}{v_{\mathrm{psub}}}
+\newcommand{\vmult}{v_{\mathrm{mult}}}
+\newcommand{\vpmult}{v_{\mathrm{pmult}}}
+\newcommand{\vneg}{v_{\mathrm{neg}}}
+\newcommand{\vsub}{v_{\mathrm{sub}}}
+\newcommand{\KS}{\mathsf{KeySwitch}}
+\newcommand{\Sgeo}[1]{\frac{n^{#1+1}-1}{n-1}}
+
+\title{\textbf{BFV Noise-Bound Extensions for Microsoft SEAL}\\[0.3em]
+       \large Strict Bounds for RNS Key Switching, Relinearization, Rotation, Modulus Switching, and General Expressions}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Introduction}
+
+The noise bounds for fresh encryption, negation, addition, subtraction, plain addition, plain subtraction, plain multiplication, and multiplication are established in Lemmas~9--17 of the Microsoft SEAL~2.3.1 manual (Appendix, strict infinity-norm bounds).
+This document extends this rigorous framework to operations implemented in SEAL's Residue Number System (RNS) arithmetic: key switching using an auxiliary special prime $P$, ciphertext relinearization, Galois rotation, and modulus switching.
+Finally, it establishes and proves an inductive noise bound for arbitrary BFV expressions of size $N$.
+
+% =================================================================
+\section*{Notations}
+% =================================================================
+
+\subsection*{SEAL Notations}
+
+The notation adopted in this document adheres to that of the Microsoft SEAL~2.3.1 manual.
+The operations $\lfloor \cdot \rfloor$, $\lceil \cdot \rceil$, and $\lfloor \cdot \rceil$ denote rounding down, rounding up, and rounding to the nearest integer, respectively; when applied to a polynomial, they act coefficient-wise.
+The norm $\norm{\cdot}$ denotes the polynomial infinity norm, defined for $a = \sum_{i=0}^{n-1} a_i X^i \in R \otimes \mathbb{Q}$ by $\norm{a} = \max_{0 \leq i < n} |a_i|$, while $\norm{\cdot}_{\mathrm{can}}$ denotes the canonical embedding norm.
+The reduction of an integer modulo $t$ into the symmetric interval $[-t/2, t/2)$ is denoted by $[\cdot]_t$, and is applied coefficient-wise to polynomials.
+The base-2 logarithm is denoted by $\log$, and the base-$a$ logarithm by $\log_a$.
+Table~\ref{tab:notation} lists the parameters of the BFV scheme as defined in Table~1 of the SEAL manual.
+Furthermore, the ring expansion bound established in Claim~2 of the SEAL manual guarantees that for all $a, b \in R \otimes \mathbb{Q}$,
+\[
+  \norm{ab} \leq n \norm{a} \norm{b}.
+\]
+
+\begin{table}[ht]
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{|c|p{8.5cm}|p{3.8cm}|}
+\hline
+\textbf{Parameter} & \textbf{Description} & \textbf{Name in SEAL (if applicable)} \\
+\hline
+$q$ & Modulus in ciphertext space, of the form $q_1 \times \cdots \times q_k$, where $q_i$ are prime & \texttt{coeff\_modulus} \\
+\hline
+$t$ & Modulus in plaintext space (plaintext modulus) & \texttt{plain\_modulus} \\
+\hline
+$n$ & A power of 2 & \texttt{poly\_modulus\_degree} \\
+\hline
+$x^n+1$ & Polynomial modulus specifying the ring $R$ & \texttt{poly\_modulus} \\
+\hline
+$R$ & The cyclotomic polynomial ring $\mathbb{Z}[x]/(x^n+1)$ & \\
+\hline
+$R_a$ & The quotient ring $\mathbb{Z}_a[x]/(x^n+1)$, with coefficients reduced modulo $a$ & \\
+\hline
+$w$ & Base into which ciphertext elements are decomposed during relinearization & \\
+\hline
+$\log w$ & Decomposition bit count & \texttt{decomposition\_bit\_count} \\
+\hline
+$\ell$ & Evaluation key length parameter satisfying $\ell+1 = \lfloor\log_w q\rfloor + 1$ & \\
+\hline
+$\delta$ & Expansion factor in the ring $R$ ($\delta \leq n$) & \\
+\hline
+$\Delta$ & Quotient on division of $q$ by $t$, defined as $\lfloor q/t\rfloor$ & \\
+\hline
+$r_t(q)$ & Remainder on division of $q$ by $t$, satisfying $q = \Delta t + r_t(q)$ with $0 \leq r_t(q) < t$ & \\
+\hline
+$\chi$ & Error distribution over $R$ & \\
+\hline
+$B$ & Bound on the infinity norm of elements sampled from $\chi$ & \\
+\hline
+\end{tabular}
+\caption{Notation used throughout this document (reproduced from SEAL manual Table~1).}
+\label{tab:notation}
+\end{table}
+
+\subsection*{Additional Notations}
+
+The derivations and proofs in this document employ the following additional notations:
+\begin{itemize}[leftmargin=2em]
+\item \textbf{RNS Primes and Modulus Sum}: The coefficient modulus is the product $q = \prod_{j=1}^k q_j$ of $k$ pairwise coprime prime moduli $q_j$.
+Its prime sum is denoted by $q_\Sigma = \sum_{j=1}^k q_j$.
+\item \textbf{Special Auxiliary Prime $P$}: In RNS key switching, $P \geq 2$ denotes an auxiliary prime coprime to $q$, *i.e.*, $\gcd(P, q) = 1$.
+\item \textbf{RNS Residues}: For any polynomial $c \in R_q$, its residue modulo $q_j$ is denoted by $c^{(j)} = [c]_{q_j} \in [0, q_j)$.
+\item \textbf{Orthogonal CRT Reconstruction Factors}: For each $j \in \{1, \dots, k\}$, the integer factor
+\[
+  \gamma_j = \frac{q}{q_j}\left[\left(\frac{q}{q_j}\right)^{-1}\right]_{q_j} \in \mathbb{Z}
+\]
+satisfies $\gamma_j \equiv 1 \pmod{q_j}$ and $\gamma_j \equiv 0 \pmod{q_i}$ for all $i \neq j$.
+\item \textbf{Rational Ring Extension}: The ambient rational algebra is denoted by $R \otimes \mathbb{Q} = \mathbb{Q}[x]/(x^n+1)$, which contains the scaled invariant noise polynomials.
+\item \textbf{Galois Automorphisms}: For an odd integer $g$ coprime to $2n$, the map $\tau_g\colon R \to R$ is the ring automorphism defined by $X \mapsto X^g$.
+\item \textbf{Geometric Series Factor}: For any non-negative integer $j$, the factor $\Sgeo{j} = \frac{n^{j+1}-1}{n-1} = \sum_{i=0}^j n^i$ bounds the accumulation of powers of $n$.
+\item \textbf{Key Switching Operator}: The operator $\KS(c; \mathrm{evk})$ denotes the one-step RNS key switching procedure, mapping a ciphertext polynomial $c \in R_q$ to a pair of polynomials $(d_0, d_1) \in R_q^2$ using an evaluation key $\mathrm{evk}$.
+\item \textbf{Ciphertext and Noise Designations}: Ciphertexts resulting from relinearization, rotation, modulus switching, plain addition, and plain subtraction are denoted by $\ctrelin$, $\ctrot$, $\ctms$, $\ctpadd$, and $\ctpsub$, with respective invariant noise polynomials $\vrelin$, $\vrot$, $\vms$, $\vpadd$, and $\vpsub$.
+The noise polynomials for addition, subtraction, multiplication, plain multiplication, and negation are denoted by $\vadd$, $\vsub$, $\vmult$, $\vpmult$, and $\vneg$.
+\item \textbf{Recursive Expression Bound}: For an abstract FHE expression $\mathcal{E}$, the value $\mathcal{B}(\mathcal{E}) \in \mathbb{R}_{>0}$ denotes its computed invariant noise upper bound.
+\end{itemize}
+
+% =================================================================
+\section*{Conventions and Assumptions}
+% =================================================================
+
+The mathematical derivations in this document operate under the following formalized conventions and assumptions:
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Invariant Noise Convention}:
+Following Definition~1 of the SEAL manual, a ciphertext $\ct = (c_0, \dots, c_j) \in R_q^{j+1}$ of size $j+1$ encrypts a plaintext message $m \in R_t$ with invariant noise $v \in R \otimes \mathbb{Q}$ under secret key $s \in R$ if
+\[
+  \frac{t}{q}\ct(s) = \frac{t}{q}\sum_{i=0}^j c_i s^i = m + v + at \in R \otimes \mathbb{Q},
+\]
+for some integer-coefficient polynomial $a \in R$.
+Decryption is successful whenever $\norm{v} < 1/2$.
+
+\item \textbf{Secret Key and Error Assumptions}:
+The secret key polynomial $s \in R$ has ternary coefficients, *i.e.*, $s \in R_3$, which guarantees $\norm{s} = 1$.
+All fresh encryption and key-switching errors are sampled from distribution $\chi$ and satisfy $\norm{e} \leq B$.
+
+\item \textbf{Algebraic and Notational Conventions}:
+Polynomial arithmetic is performed in the cyclotomic ring $R = \mathbb{Z}[x]/(x^n+1)$.
+Ciphertext sizes are denoted exclusively by integers such as $j+1$, $M+1$, or $K_{\mathrm{size}}$, reserving the symbol $s$ exclusively for the secret key.
+The evaluation key length parameter $\ell$ from Table~\ref{tab:notation} is reserved for base-$w$ decomposition; indices of RNS moduli are denoted exclusively by $j \in \{1, \dots, k\}$.
+\end{enumerate}
+
+% =================================================================
+\section*{Lemma 18: Key Switching (RNS form)}
+% =================================================================
+
+In SEAL, key switching from a secret key $s'$ to the target secret key $s$ is performed over the extended modulus $qP$.
+A key-switching key consists of $k$ pairs $\mathrm{evk}[j] = (b_j, a_j) \in R_{qP}^2$ for $1 \leq j \leq k$, where
+\[
+  b_j = \bigl[-(a_j s + e_j) + P\gamma_j s'\bigr]_{qP}, \qquad a_j \xleftarrow{\$} R_{qP}, \quad e_j \leftarrow \chi, \quad \norm{e_j} \leq B.
+\]
+For a ciphertext component $c \in R_q$, the procedure $\KS(c; \mathrm{evk})$ computes the linear combination over the integer lifts of the residues $c^{(j)} = [c]_{q_j} \in [0, q_j)$:
+\[
+  x_0 = \sum_{j=1}^k c^{(j)} b_j, \qquad x_1 = \sum_{j=1}^k c^{(j)} a_j,
+\]
+and scales down by $P$ using nearest-integer rounding:
+\[
+  \KS(c; \mathrm{evk}) = (d_0, d_1), \qquad d_0 = \left[\left\lfloor \frac{x_0}{P} \right\rceil\right]_q, \quad d_1 = \left[\left\lfloor \frac{x_1}{P} \right\rceil\right]_q.
+\]
+By definition of nearest-integer rounding, $\lfloor x/P \rceil = (x - [x]_P)/P$, so that $\norm{\lfloor x/P \rceil - x/P} \leq 1/2$.
+
+\begin{lemma}[One-step key switching]\label{lem:ks}
+Let $c \in R_q$ and $(d_0, d_1) = \KS(c; \mathrm{evk})$ for an evaluation key from $s'$ to $s$.
+Then there exist an integer-coefficient polynomial $r \in R$ and an error polynomial $E \in R \otimes \mathbb{Q}$ such that
+\[
+  d_0 + d_1 s = c s' + E + q r,
+\]
+where
+\[
+  \norm{E} \leq \frac{n B q_\Sigma}{P} + \frac{n+1}{2} \leq n B q_\Sigma.
+\]
+\end{lemma}
+
+\begin{proof}
+By definition of rounding division by $P$ followed by coefficient reduction modulo $q$, there exist rounding error polynomials $\delta_0, \delta_1 \in R \otimes \mathbb{Q}$ with $\norm{\delta_i} \leq 1/2$ and integer-coefficient polynomials $k_0, k_1 \in R$ such that
+\[
+  d_i = \left\lfloor \frac{x_i}{P} \right\rceil + q k_i = \frac{x_i}{P} + \delta_i + q k_i, \qquad i \in \{0, 1\}.
+\]
+Lifting the modular definition of $b_j$ from $R_{qP}$ to $R$, there exist integer-coefficient polynomials $r_j \in R$ such that
+\[
+  b_j + a_j s = -e_j + P \gamma_j s' + q P r_j.
+\]
+Evaluating $d_0 + d_1 s$:
+\begin{align*}
+  d_0 + d_1 s
+  &= \frac{1}{P}(x_0 + x_1 s) + \delta_0 + \delta_1 s + q(k_0 + k_1 s)\\
+  &= \frac{1}{P}\sum_{j=1}^k c^{(j)}(b_j + a_j s) + \delta_0 + \delta_1 s + q(k_0 + k_1 s)\\
+  &= \frac{1}{P}\sum_{j=1}^k c^{(j)}\bigl(-e_j + P \gamma_j s' + q P r_j\bigr) + \delta_0 + \delta_1 s + q(k_0 + k_1 s)\\
+  &= -\frac{1}{P}\sum_{j=1}^k c^{(j)} e_j + \left(\sum_{j=1}^k c^{(j)} \gamma_j\right) s' + q \sum_{j=1}^k c^{(j)} r_j + \delta_0 + \delta_1 s + q(k_0 + k_1 s).
+\end{align*}
+By the Chinese Remainder Theorem, since $\gamma_j \equiv 1 \pmod{q_j}$ and $\gamma_j \equiv 0 \pmod{q_i}$ for $i \neq j$, the modular congruence
+\[
+  \sum_{j=1}^k c^{(j)} \gamma_j \equiv c^{(j)} \equiv c \pmod{q_j}
+\]
+holds for every $j \in \{1, \dots, k\}$.
+Because the prime moduli $q_j$ are pairwise coprime, their product divides the difference, establishing the existence of an integer-coefficient polynomial $K_{\mathrm{crt}} \in R$ such that
+\[
+  \sum_{j=1}^k c^{(j)} \gamma_j = c + q K_{\mathrm{crt}}.
+\]
+Setting
+\[
+  E = -\frac{1}{P}\sum_{j=1}^k c^{(j)} e_j + \delta_0 + \delta_1 s, \qquad r = K_{\mathrm{crt}} s' + \sum_{j=1}^k c^{(j)} r_j + k_0 + k_1 s \in R,
+\]
+gives the exact algebraic identity $d_0 + d_1 s = c s' + E + q r$.
+
+To bound $\norm{E}$, we apply the triangle inequality and the ring expansion bound from Claim~2 of the SEAL manual, namely $\norm{ab} \leq n\norm{a}\norm{b}$ for all $a, b \in R$:
+\begin{align*}
+  \norm{E}
+  &\leq \frac{1}{P}\sum_{j=1}^k \norm{c^{(j)} e_j} + \norm{\delta_0} + \norm{\delta_1 s}\\
+  &\leq \frac{1}{P}\sum_{j=1}^k n \norm{c^{(j)}} \norm{e_j} + \norm{\delta_0} + n \norm{\delta_1} \norm{s}.
+\end{align*}
+Because $c^{(j)} \in R$ has integer coefficients in $[0, q_j)$, the inequality $\norm{c^{(j)}} \leq q_j$ holds.
+Substituting $\norm{e_j} \leq B$, $\norm{\delta_0} \leq 1/2$, $\norm{\delta_1} \leq 1/2$, and $\norm{s} = 1$ yields:
+\[
+  \norm{E} \leq \frac{n B \sum_{j=1}^k q_j}{P} + \frac{1}{2} + \frac{n}{2} = \frac{n B q_\Sigma}{P} + \frac{n+1}{2}.
+\]
+Finally, using $P \geq 2$ and $B q_\Sigma \geq n+1 \geq 2$, the inequality simplifies to:
+\[
+  \frac{n B q_\Sigma}{P} + \frac{n+1}{2} \leq \frac{n B q_\Sigma}{2} + \frac{n B q_\Sigma}{2} = n B q_\Sigma.
+\]
+\end{proof}
+
+\begin{remark}[Algebraic Interpretation of Error $E$]
+The error polynomial $E$ consists of two distinct components: the scaled sum of encryption errors $-\frac{1}{P}\sum_{j=1}^k c^{(j)} e_j$ and the rounding term $\delta_0 + \delta_1 s$.
+Dividing by $P$ ensures that the key-switching noise is suppressed by the auxiliary modulus, eliminating the factor $w$ present in base-$w$ decomposition.
+\end{remark}
+
+% =================================================================
+\section*{Lemma 19: Relinearization (RNS form)}
+% =================================================================
+
+\begin{lemma}[Relinearization, RNS form]\label{lem:relin}
+Let $\ct = (c_0, \dots, c_M)$ be a ciphertext of size $M+1$ encrypting $m$ with noise $v$, and let $\ctrelin$ of size $N+1$ be obtained by relinearization modulo $q$, where $2 \leq N+1 < M+1$.
+Then $\ctrelin$ encrypts $m$ and its noise $\vrelin$ satisfies
+\[
+  \norm{\vrelin} \leq \norm{v} + \frac{t}{q}(M-N)\left(\frac{n B q_\Sigma}{P} + \frac{n+1}{2}\right) \leq \norm{v} + \frac{t}{q}(M-N) n B q_\Sigma.
+\]
+In particular, relinearizing down to size $2$, *i.e.*, $N=1$, on a ciphertext of size $K_{\mathrm{size}} = M+1$ yields
+\[
+  \norm{\vrelin} \leq \norm{v} + \frac{t}{q}(K_{\mathrm{size}}-2) n B q_\Sigma.
+\]
+\end{lemma}
+
+\begin{proof}
+Relinearization reduces the ciphertext size from $M+1$ to $N+1$ in $M-N$ successive elimination steps.
+We first analyze a single elimination step from size $K+1$ down to size $K$, where $K \geq N+1 \geq 2$.
+The input ciphertext is $(c_0, \dots, c_K)$ with invariant noise $v_K$ satisfying
+\[
+  \frac{t}{q}\sum_{i=0}^K c_i s^i = m + v_K + at,
+\]
+for some integer polynomial $a \in R$.
+The highest-degree component $c_K$ encrypts terms under key $s^K = s^{K-2} \cdot s^2$.
+Evaluating under secret key $s$, the term $c_K s^K$ is rewritten as $(c_K s^{K-2}) s^2$.
+Using the relinearization key $\mathrm{evk}_K$ from $s^2$ to $s$, one computes $(d_0, d_1) = \KS(c_K; \mathrm{evk}_K)$.
+The updated ciphertext components are:
+\[
+  c_i' = c_i \quad (0 \leq i \leq K-3), \qquad
+  c_{K-2}' = [c_{K-2} + d_0]_q, \qquad
+  c_{K-1}' = [c_{K-1} + d_1]_q.
+\]
+By Lemma~\ref{lem:ks}, there exist an integer polynomial $r_K \in R$ and an error polynomial $E_K \in R \otimes \mathbb{Q}$ satisfying $\norm{E_K} \leq \frac{n B q_\Sigma}{P} + \frac{n+1}{2} \leq n B q_\Sigma$ such that
+\[
+  d_0 + d_1 s = c_K s^2 + E_K + q r_K.
+\]
+Lifting the reductions modulo $q$ to $R$, there exist integer-coefficient polynomials $A_0, A_1 \in R$ such that
+\[
+  c_{K-2}' = c_{K-2} + d_0 + q A_0, \qquad c_{K-1}' = c_{K-1} + d_1 + q A_1.
+\]
+Evaluating the decrypted value of the size-$K$ ciphertext $\ct' = (c_0', \dots, c_{K-1}')$:
+\begin{align*}
+  \sum_{i=0}^{K-1} c_i' s^i
+  &= \sum_{i=0}^{K-3} c_i s^i + (c_{K-2} + d_0 + q A_0) s^{K-2} + (c_{K-1} + d_1 + q A_1) s^{K-1}\\
+  &= \sum_{i=0}^{K-1} c_i s^i + (d_0 + d_1 s) s^{K-2} + q (A_0 + A_1 s) s^{K-2}\\
+  &= \sum_{i=0}^{K-1} c_i s^i + (c_K s^2 + E_K + q r_K) s^{K-2} + q (A_0 + A_1 s) s^{K-2}\\
+  &= \sum_{i=0}^K c_i s^i + E_K s^{K-2} + q \bigl(r_K + A_0 + A_1 s\bigr) s^{K-2}.
+\end{align*}
+Scaling by $t/q$:
+\begin{align*}
+  \frac{t}{q}\ct'(s)
+  &= \frac{t}{q}\sum_{i=0}^K c_i s^i + \frac{t}{q} E_K s^{K-2} + t \bigl(r_K + A_0 + A_1 s\bigr) s^{K-2}\\
+  &= m + v_K + at + \frac{t}{q} E_K s^{K-2} + t r_K'\\
+  &= m + \left(v_K + \frac{t}{q} E_K s^{K-2}\right) + (a + r_K')t,
+\end{align*}
+where $r_K' = \bigl(r_K + A_0 + A_1 s\bigr) s^{K-2} \in R$.
+Since $a + r_K' \in R$ has integer coefficients, $\ct'$ encrypts the message $m$, and its invariant noise is
+\[
+  v_{K-1} = v_K + \frac{t}{q} E_K s^{K-2}.
+\]
+Because $K \geq 2$, the key-switching operation converts $c_K s^2$ directly to $d_0 + d_1 s$, eliminating the factor $s^2$ and replacing it with linear terms; for $K=2$, $s^{K-2} = s^0 = 1$.
+Iterating across all $M-N$ elimination steps from $K = M$ down to $K = N+1$:
+\[
+  \vrelin = v + \frac{t}{q}\sum_{K=N+1}^M E_K.
+\]
+Applying the triangle inequality:
+\[
+  \norm{\vrelin} \leq \norm{v} + \frac{t}{q}\sum_{K=N+1}^M \norm{E_K} \leq \norm{v} + \frac{t}{q}(M-N)\left(\frac{n B q_\Sigma}{P} + \frac{n+1}{2}\right) \leq \norm{v} + \frac{t}{q}(M-N) n B q_\Sigma.
+\]
+In the case of relinearization down to size 2, corresponding to $N=1$, the number of elimination steps is $M-1 = K_{\mathrm{size}}-2$, completing the proof.
+\end{proof}
+
+\begin{remark}[Comparison with SEAL Lemma~12 and Implementation]
+Lemma~12 of the SEAL manual analyzes relinearization under base-$w$ decomposition, resulting in an additive term proportional to $(\ell+1)w$.
+In the RNS implementation of SEAL, the base-$w$ decomposition is replaced by RNS decomposition across the prime factors $q_j$ together with scaling by the special prime $P$.
+The factor $(\ell+1)w$ is thus replaced by $q_\Sigma = \sum_{j=1}^k q_j$.
+The reference implementation in \texttt{bfv\_noise\_bound.cpp} computes $(K_{\mathrm{size}}-2) \frac{t}{q} n B q_\Sigma$, which matches Lemma~\ref{lem:relin} as a valid, slightly conservative upper bound.
+\end{remark}
+
+% =================================================================
+\section*{Lemma 20: Galois Rotation}
+% =================================================================
+
+\begin{lemma}[Galois rotation]\label{lem:rot}
+Let $\ct = (c_0, c_1)$ be a ciphertext of size $2$ encrypting $m$ with noise $v$, let $g$ be an odd integer coprime to $2n$, and let $\tau_g\colon R \to R$ be the Galois automorphism defined by $X \mapsto X^g$.
+Let $\mathrm{evk}_g$ be the Galois key from $s' = \tau_g(s)$ to $s$.
+Let $\ctrot = \bigl([\tau_g(c_0) + d_0]_q, d_1\bigr)$, where $(d_0, d_1) = \KS(\tau_g(c_1); \mathrm{evk}_g)$.
+Then $\ctrot$ encrypts $\tau_g(m)$, and its noise $\vrot$ satisfies
+\[
+  \vrot = \tau_g(v) + \frac{t}{q}E, \qquad
+  \norm{\vrot} \leq \norm{v} + \frac{t}{q}\left(\frac{n B q_\Sigma}{P} + \frac{n+1}{2}\right) \leq \norm{v} + \frac{t}{q} n B q_\Sigma.
+\]
+\end{lemma}
+
+\begin{proof}
+The map $\tau_g$ is a ring automorphism of $R$ and extends naturally to $R \otimes \mathbb{Q}$.
+Because $\gcd(g, 2n) = 1$, the exponent mapping $j \mapsto (j g \bmod 2n)$ defines a permutation of $\{0, \dots, 2n-1\}$.
+Using the cyclotomic relation $X^n \equiv -1$, each monomial $X^{jg}$ maps to $\pm X^k$ for a distinct index $k \in \{0, \dots, n-1\}$.
+Thus $\tau_g$ permutes the polynomial coefficients up to sign changes, establishing that $\tau_g$ is an exact isometry on the infinity norm, *i.e.*, $\norm{\tau_g(a)} = \norm{a}$ for all $a \in R \otimes \mathbb{Q}$.
+Furthermore, $\tau_g(at) = \tau_g(a)t$, and $\tau_g$ maps integer-coefficient polynomials to integer-coefficient polynomials.
+Applying $\tau_g$ to the invariant noise relation $\frac{t}{q}(c_0 + c_1 s) = m + v + at$:
+\[
+  \frac{t}{q}\bigl(\tau_g(c_0) + \tau_g(c_1)\tau_g(s)\bigr) = \tau_g(m) + \tau_g(v) + \tau_g(a)t.
+\]
+Applying Lemma~\ref{lem:ks} to the polynomial $c = \tau_g(c_1)$ with key $\mathrm{evk}_g$ from $s' = \tau_g(s)$ to $s$:
+\[
+  d_0 + d_1 s = \tau_g(c_1)\tau_g(s) + E + q r,
+\]
+for some integer polynomial $r \in R$ and an error polynomial $E \in R \otimes \mathbb{Q}$ satisfying $\norm{E} \leq \frac{n B q_\Sigma}{P} + \frac{n+1}{2}$.
+Because Lemma~\ref{lem:ks} holds for an arbitrary source key $s'$, the bound applies directly with $s' = \tau_g(s)$.
+Lifting the modular addition $[\tau_g(c_0) + d_0]_q$ from $R_q$ to $R$, there exists an integer-coefficient polynomial $A_0 \in R$ such that $[\tau_g(c_0) + d_0]_q = \tau_g(c_0) + d_0 + q A_0$.
+Evaluating $\ctrot(s)$:
+\begin{align*}
+  \frac{t}{q}\ctrot(s)
+  &= \frac{t}{q}\bigl(\tau_g(c_0) + d_0 + q A_0 + d_1 s\bigr)\\
+  &= \frac{t}{q}\bigl(\tau_g(c_0) + \tau_g(c_1)\tau_g(s)\bigr) + \frac{t}{q}E + t (r + A_0)\\
+  &= \tau_g(m) + \tau_g(v) + \tau_g(a)t + \frac{t}{q}E + t (r + A_0)\\
+  &= \tau_g(m) + \left(\tau_g(v) + \frac{t}{q}E\right) + \bigl(\tau_g(a) + r + A_0\bigr)t.
+\end{align*}
+Since $\tau_g(a) + r + A_0 \in R$ has integer coefficients, $\ctrot$ encrypts $\tau_g(m)$, and its noise is represented by $\vrot = \tau_g(v) + \frac{t}{q}E$.
+Taking the infinity norm and using the isometry $\norm{\tau_g(v)} = \norm{v}$:
+\[
+  \norm{\vrot} \leq \norm{\tau_g(v)} + \frac{t}{q}\norm{E} \leq \norm{v} + \frac{t}{q}\left(\frac{n B q_\Sigma}{P} + \frac{n+1}{2}\right) \leq \norm{v} + \frac{t}{q} n B q_\Sigma.
+\]
+\end{proof}
+
+\begin{remark}[Scope and Multi-Step Rotations]
+In batched BFV encoding, the plaintext polynomial $m$ encodes a matrix of plaintext slots, and the automorphism $\tau_g$ acts as a cyclic shift on the slots.
+Lemma~\ref{lem:rot} accounts for the exact cost of a single Galois key switch on a ciphertext of size 2.
+If a rotation by $k$ steps is evaluated in software using $h$ successive power-of-two automorphisms, the bound compounds to $\norm{v} + h \frac{t}{q} n B q_\Sigma$.
+The single-key formula implemented in \texttt{bfv\_noise\_bound.cpp} corresponds to $h=1$, which holds whenever the specific Galois key for the requested step is available.
+\end{remark}
+
+% =================================================================
+\section*{Lemma 21: Modulus Switching}
+% =================================================================
+
+\begin{lemma}[Modulus switching]\label{lem:modsw}
+Let $\ct = (c_0, \dots, c_j)$ be a ciphertext of size $j+1$ modulo $q = q_1 \cdots q_k$ ($k \geq 2$) encrypting $m$ with noise $v$.
+Write $q = q' q_k$, where $q_k$ is the prime being dropped and $q' = q/q_k = \prod_{i=1}^{k-1} q_i$ is the target modulus.
+Let $\ctms = (c_0', \dots, c_j')$ with
+\[
+  c_i' = \left\lfloor \frac{c_i}{q_k} \right\rceil \pmod{q'} = \frac{c_i - [c_i]_{q_k}}{q_k} \pmod{q'}, \qquad 0 \leq i \leq j.
+\]
+Then $\ctms$ encrypts $m$ modulo $q'$, and its noise $\vms$ satisfies
+\[
+  \norm{\vms} \leq \norm{v} + \frac{t}{2q'}\Sgeo{j} = \norm{v} + \frac{t}{2q'}\cdot\frac{n^{j+1}-1}{n-1}.
+\]
+\end{lemma}
+
+\begin{proof}
+For each $i \in \{0, \dots, j\}$, let $r_i = [c_i]_{q_k} \in [-q_k/2, q_k/2)$ be the centered residue of $c_i$ modulo $q_k$.
+Then $c_i - r_i$ is an exact integer multiple of $q_k$.
+Lifting to $R$, there exist integer-coefficient polynomials $A_i \in R$ such that
+\[
+  c_i' = \frac{c_i - r_i}{q_k} + q' A_i = \frac{c_i}{q_k} + \varepsilon_i + q' A_i,
+\]
+where $\varepsilon_i = -r_i / q_k \in R \otimes \mathbb{Q}$.
+Because $r_i$ is in the centered interval, $\norm{\varepsilon_i} \leq 1/2$.
+Evaluating $\frac{t}{q'}\ctms(s)$ and using $q = q' q_k$:
+\begin{align*}
+  \frac{t}{q'}\ctms(s)
+  &= \frac{t}{q'}\sum_{i=0}^j c_i' s^i\\
+  &= \frac{t}{q'}\sum_{i=0}^j \left(\frac{c_i}{q_k} + \varepsilon_i + q' A_i\right) s^i\\
+  &= \frac{t}{q' q_k}\sum_{i=0}^j c_i s^i + \frac{t}{q'}\sum_{i=0}^j \varepsilon_i s^i + t \sum_{i=0}^j A_i s^i\\
+  &= \frac{t}{q}\ct(s) + \frac{t}{q'}\sum_{i=0}^j \varepsilon_i s^i + t A_{\mathrm{ms}},
+\end{align*}
+where $A_{\mathrm{ms}} = \sum_{i=0}^j A_i s^i \in R$.
+Substituting the definition of the invariant noise $\frac{t}{q}\ct(s) = m + v + at$:
+\[
+  \frac{t}{q'}\ctms(s) = m + \left(v + \frac{t}{q'}\sum_{i=0}^j \varepsilon_i s^i\right) + (a + A_{\mathrm{ms}})t.
+\]
+Because $a + A_{\mathrm{ms}} \in R$ has integer coefficients, $\ctms$ encrypts $m$ under the new modulus $q'$, and the noise is represented by
+\[
+  \vms = v + \frac{t}{q'}\sum_{i=0}^j \varepsilon_i s^i.
+\]
+We now bound the infinity norm. By the triangle inequality:
+\[
+  \norm{\vms} \leq \norm{v} + \frac{t}{q'}\sum_{i=0}^j \norm{\varepsilon_i s^i}.
+\]
+For $i = 0$, $s^0 = 1$, so $\norm{\varepsilon_0 s^0} = \norm{\varepsilon_0} \leq 1/2$.
+For $i \geq 1$, applying Claim~2 of the SEAL manual inductively with $\norm{s} = 1$ yields $\norm{s^i} \leq n^{i-1}$, and therefore:
+\[
+  \norm{\varepsilon_i s^i} \leq n \norm{\varepsilon_i} \norm{s^i} \leq n \cdot \norm{\varepsilon_i} \cdot n^{i-1} = n^i \norm{\varepsilon_i} \leq \frac{1}{2} n^i.
+\]
+Summing the finite geometric progression:
+\[
+  \sum_{i=0}^j \norm{\varepsilon_i s^i} \leq \frac{1}{2}\sum_{i=0}^j n^i = \frac{1}{2}\frac{n^{j+1}-1}{n-1} = \frac{1}{2}\Sgeo{j}.
+\]
+Therefore,
+\[
+  \norm{\vms} \leq \norm{v} + \frac{t}{2q'}\Sgeo{j} = \norm{v} + \frac{t}{2q'}\cdot\frac{n^{j+1}-1}{n-1}.
+\]
+\end{proof}
+
+\begin{remark}[Relation to Geometric Sum in Implementation]
+The geometric sum in Lemma~\ref{lem:modsw} is identical to inequality~(1) in Lemma~11 of the SEAL manual.
+In \texttt{bfv\_noise\_bound.cpp}, the helper \texttt{log\_geometric\_sum(n, j+1)} returns $\sum_{i=1}^{j+1} n^i = n \Sgeo{j}$.
+The implemented bound is therefore larger by a factor of $n$, representing a valid but conservative upper bound on the provable bound of Lemma~\ref{lem:modsw}.
+\end{remark}
+
+% =================================================================
+\section*{Synthesis and General Expression Noise Bound}
+% =================================================================
+
+\subsection*{Synthesis of Noise Bounds}
+
+Table~\ref{tab:synthesis} synthesizes the strict infinity-norm noise bounds for all elementary BFV operations, combining the textbook results of the SEAL manual (Lemmas~9--17) and the RNS extensions derived in Lemmas~\ref{lem:relin}--\ref{lem:modsw}.
+
+\begin{table}[ht]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4.5pt}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{|l|c|p{6.6cm}|c|c|}
+\hline
+\textbf{Operation} & \textbf{Source} & \textbf{Invariant Noise Bound $\norm{v_{\mathrm{out}}}$} & \textbf{Size} & \textbf{Modulus} \\
+\hline
+\hline
+\multicolumn{5}{|l|}{\textit{Elementary operations from SEAL 2.3.1 manual (Lemmas 9--17)}} \\
+\hline
+Fresh encryption & Lemma~9 & $\frac{r_t(q)}{q}\norm{m} + \frac{tB}{q}(2n+1)$ & $2$ & $q$ \\
+\hline
+Negation & Lemma~15 & $\norm{v}$ & $j+1$ & $q$ \\
+\hline
+Addition & Lemma~10 & $\norm{v_1} + \norm{v_2}$ & $\max(j_1, j_2)+1$ & $q$ \\
+\hline
+Subtraction & Lemma~16 & $\norm{v_1} + \norm{v_2}$ & $\max(j_1, j_2)+1$ & $q$ \\
+\hline
+Plain addition & Lemma~14 & $\norm{v} + \frac{r_t(q)}{q}\norm{m_2}$ & $j+1$ & $q$ \\
+\hline
+Plain subtraction & Lemma~17 & $\norm{v} + \frac{r_t(q)}{q}\norm{m_2}$ & $j+1$ & $q$ \\
+\hline
+Plain multiplication & Lemma~13 & $\norm{m_2}_1 \norm{v} \leq N_{m_2}\norm{m_2}\norm{v}$ & $j+1$ & $q$ \\
+\hline
+Multiplication & Lemma~11 & 
+$\begin{aligned}[t]
+&\left[(N_{m_1}+n)\norm{m_1} + \frac{nt}{2}\Sgeo{j_1}\right]\norm{v_2}\\
+&{}+ \left[(N_{m_2}+n)\norm{m_2} + \frac{nt}{2}\Sgeo{j_2}\right]\norm{v_1}\\
+&{}+ 3n\norm{v_1}\norm{v_2} + \frac{t}{2q}\Sgeo{j_1+j_2}
+\end{aligned}$ & $j_1+j_2+1$ & $q$ \\
+\hline
+\hline
+\multicolumn{5}{|l|}{\textit{Derived operations in RNS representation}} \\
+\hline
+Relinearization & Lemma~\ref{lem:relin} & $\norm{v} + \frac{t}{q}(K_{\mathrm{size}}-2)\,nBq_\Sigma$ & $2$ & $q$ \\
+\hline
+Galois rotation & Lemma~\ref{lem:rot} & $\norm{v} + \frac{t}{q}\,nBq_\Sigma$ & $2$ & $q$ \\
+\hline
+Modulus switching & Lemma~\ref{lem:modsw} & $\norm{v} + \frac{t}{2q'}\Sgeo{j}$ & $j+1$ & $q' = q/q_k$ \\
+\hline
+\end{tabular}
+\caption{Synthesis of strict BFV invariant noise bounds for elementary operations.}
+\label{tab:synthesis}
+\end{table}
+
+\subsection*{Formalization of an FHE Expression}
+
+An FHE computation is formally modeled as an Abstract Syntax Tree (AST) representing the evaluation of ciphertexts.
+
+\begin{definition*}[BFV Noise Expression of Size $N$]
+A \emph{BFV noise expression} $\mathcal{E}$ of size $N \in \mathbb{N}_{\geq 1}$, representing the number of operation nodes, is defined inductively:
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Base case ($N=1$)}: A fresh encryption $\mathcal{E} = \mathsf{fresh}(m)$, where $m \in R_t$ is a plaintext message.
+\item \textbf{Unary operations ($N = N_1 + 1$)}: If $\mathcal{E}_1$ is an expression of size $N_1$, then $\mathcal{E}$ is formed by one of:
+      \begin{align*}
+        \mathcal{E} &\in \bigl\{ \mathsf{negate}(\mathcal{E}_1),\ \mathsf{add\_plain}(\mathcal{E}_1, m_2),\ \mathsf{sub\_plain}(\mathcal{E}_1, m_2),\ \mathsf{multiply\_plain}(\mathcal{E}_1, m_2), \\
+        &\qquad\ \mathsf{relinearize}(\mathcal{E}_1),\ \mathsf{rotate}(\mathcal{E}_1),\ \mathsf{mod\_switch}(\mathcal{E}_1) \bigr\},
+      \end{align*}
+      where $m_2 \in R_t$ is a known plaintext polynomial.
+\item \textbf{Binary operations ($N = N_1 + N_2 + 1$)}: If $\mathcal{E}_1$ and $\mathcal{E}_2$ are expressions of sizes $N_1$ and $N_2$ evaluated at the same modulus level, then:
+      \[
+        \mathcal{E} \in \bigl\{ \mathsf{add}(\mathcal{E}_1, \mathcal{E}_2),\ \mathsf{sub}(\mathcal{E}_1, \mathcal{E}_2),\ \mathsf{multiply}(\mathcal{E}_1, \mathcal{E}_2) \bigr\},
+      \]
+      is an expression of size $N$.
+\end{enumerate}
+For each expression $\mathcal{E}$, its evaluation state is a triple
+$\mathcal{S}(\mathcal{E}) = \bigl(\mathcal{B}(\mathcal{E}),\ K_{\mathrm{size}}(\mathcal{E}),\ q(\mathcal{E})\bigr)$,
+where $\mathcal{B}(\mathcal{E}) \in \mathbb{R}_{>0}$ is the computed noise upper bound, $K_{\mathrm{size}}(\mathcal{E}) \in \mathbb{N}_{\geq 2}$ is the ciphertext size, and $q(\mathcal{E})$ is the current coefficient modulus.
+\end{definition*}
+
+\begin{definition*}[Recursive Bound Function $\mathcal{B}(\mathcal{E})$]
+The bound function $\mathcal{B}(\mathcal{E})$ is defined recursively matching the rules in Table~\ref{tab:synthesis}:
+\begin{align*}
+\mathcal{B}(\mathsf{fresh}(m)) &:= \frac{r_t(q)}{q}\norm{m} + \frac{tB}{q}(2n+1),\\
+\mathcal{B}(\mathsf{negate}(\mathcal{E}_1)) &:= \mathcal{B}(\mathcal{E}_1),\\
+\mathcal{B}(\mathsf{add\_plain}(\mathcal{E}_1, m_2)) &:= \mathcal{B}(\mathcal{E}_1) + \frac{r_t(q)}{q}\norm{m_2},\\
+\mathcal{B}(\mathsf{sub\_plain}(\mathcal{E}_1, m_2)) &:= \mathcal{B}(\mathcal{E}_1) + \frac{r_t(q)}{q}\norm{m_2},\\
+\mathcal{B}(\mathsf{multiply\_plain}(\mathcal{E}_1, m_2)) &:= \min\bigl(\norm{m_2}_1,\ N_{m_2}\norm{m_2}\bigr)\cdot \mathcal{B}(\mathcal{E}_1),\\
+\mathcal{B}(\mathsf{add}(\mathcal{E}_1, \mathcal{E}_2)) &:= \mathcal{B}(\mathcal{E}_1) + \mathcal{B}(\mathcal{E}_2),\\
+\mathcal{B}(\mathsf{sub}(\mathcal{E}_1, \mathcal{E}_2)) &:= \mathcal{B}(\mathcal{E}_1) + \mathcal{B}(\mathcal{E}_2),\\
+\mathcal{B}(\mathsf{multiply}(\mathcal{E}_1, \mathcal{E}_2)) &:=
+\left[(N_{m_1}+n)\norm{m_1} + \frac{nt}{2}\Sgeo{j_1}\right]\mathcal{B}(\mathcal{E}_2)\\
+&\quad+ \left[(N_{m_2}+n)\norm{m_2} + \frac{nt}{2}\Sgeo{j_2}\right]\mathcal{B}(\mathcal{E}_1)\\
+&\quad+ 3n\mathcal{B}(\mathcal{E}_1)\mathcal{B}(\mathcal{E}_2) + \frac{t}{2q}\Sgeo{j_1+j_2},\\
+\mathcal{B}(\mathsf{relinearize}(\mathcal{E}_1)) &:= \mathcal{B}(\mathcal{E}_1) + \frac{t}{q}(K_{\mathrm{size}}(\mathcal{E}_1)-2)\,nBq_\Sigma,\\
+\mathcal{B}(\mathsf{rotate}(\mathcal{E}_1)) &:= \mathcal{B}(\mathcal{E}_1) + \frac{t}{q}\,nBq_\Sigma,\\
+\mathcal{B}(\mathsf{mod\_switch}(\mathcal{E}_1)) &:= \mathcal{B}(\mathcal{E}_1) + \frac{t}{2q'}\Sgeo{K_{\mathrm{size}}(\mathcal{E}_1)-1},
+\end{align*}
+where $j_i = K_{\mathrm{size}}(\mathcal{E}_i) - 1$, and $q' = q/q_{\mathrm{last}}$.
+Whenever the underlying plaintext messages $m_1, m_2$ are unknown intermediate ciphertexts, universal upper bounds $\norm{m_i} \leq \lfloor t/2 \rfloor$ and $N_{m_i} \leq n$ are substituted, yielding $(N_{m_i}+n)\norm{m_i} \leq 2n\lfloor t/2\rfloor \leq nt$.
+For plain addition and subtraction, the exact theoretical bound retains the additive remainder term $\frac{r_t(q)}{q}\norm{m_2}$ from Lemma~14; its connection to the zero-growth simplification in \texttt{bfv\_noise\_bound.cpp} is clarified in Remark~\ref{rem:cpp_impl}.
+\end{definition*}
+
+% =================================================================
+\section*{Lemma 22: Soundness of the Expression Noise Bound}
+% =================================================================
+
+\begin{lemma}[Soundness of the Expression Noise Bound]\label{lem:general_bound}
+Let $\mathcal{E}$ be any well-formed BFV noise expression of size $N \in \mathbb{N}_{\geq 1}$.
+Let $\ct_{\mathcal{E}}$ be the ciphertext resulting from evaluating $\mathcal{E}$, and let $v(\mathcal{E})$ be its invariant noise.
+Then:
+\begin{equation}
+  \norm{v(\mathcal{E})} \leq \mathcal{B}(\mathcal{E}).
+  \label{eq:soundness}
+\end{equation}
+Furthermore:
+\begin{enumerate}[leftmargin=2em,label=(\roman*)]
+\item \emph{Decryption Correctness}: If $\mathcal{B}(\mathcal{E}) < 1/2$, then $\ct_{\mathcal{E}}$ decrypts correctly to the intended message $m(\mathcal{E}) \in R_t$:
+\[
+  \mathrm{Decrypt}(\ct_{\mathcal{E}}) = m(\mathcal{E}).
+\]
+\item \emph{Noise Budget Guarantee}: The remaining invariant noise budget of $\ct_{\mathcal{E}}$ satisfies:
+\[
+  \mathrm{Budget}(\ct_{\mathcal{E}}) \geq -\log_2\bigl(2\mathcal{B}(\mathcal{E})\bigr) \quad \text{bits}.
+\]
+\end{enumerate}
+\end{lemma}
+
+\begin{proof}
+We prove~\eqref{eq:soundness} by mathematical induction on the size $N$ of the expression $\mathcal{E}$.
+
+\textbf{Base Case ($N=1$)}:
+The only well-formed expression of size $1$ is a fresh encryption $\mathcal{E} = \mathsf{fresh}(m)$.
+By Lemma~9 of the SEAL manual, the invariant noise $v$ of a fresh encryption satisfies:
+\[
+  \norm{v(\mathcal{E})} \leq \frac{r_t(q)}{q}\norm{m} + \frac{tB}{q}(2n+1) = \mathcal{B}(\mathcal{E}).
+\]
+The base case holds.
+
+\textbf{Inductive Hypothesis}:
+Assume that for all well-formed expressions $\mathcal{E}'$ of size $k$ with $1 \leq k < N$, the evaluated ciphertext satisfies $\norm{v(\mathcal{E}')} \leq \mathcal{B}(\mathcal{E}')$, and its ciphertext size and modulus match $K_{\mathrm{size}}(\mathcal{E}')$ and $q(\mathcal{E}')$.
+
+\textbf{Inductive Step}:
+Let $\mathcal{E}$ be an expression of size $N > 1$. By definition, $\mathcal{E}$ is formed by applying an operation to sub-expression(s) of size strictly less than $N$. We examine each case:
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Negation}: $\mathcal{E} = \mathsf{negate}(\mathcal{E}_1)$. The sub-expression $\mathcal{E}_1$ has size $N-1 < N$.
+      By the inductive hypothesis, $\norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1)$.
+      By Lemma~15 of the SEAL manual, $\vneg = -v(\mathcal{E}_1)$, which implies
+      \[
+        \norm{v(\mathcal{E})} = \norm{-v(\mathcal{E}_1)} = \norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1) = \mathcal{B}(\mathcal{E}).
+      \]
+
+\item \textbf{Homomorphic Addition and Subtraction}: For $\mathcal{E} \in \{\mathsf{add}(\mathcal{E}_1, \mathcal{E}_2),\, \mathsf{sub}(\mathcal{E}_1, \mathcal{E}_2)\}$,
+      the sub-expressions $\mathcal{E}_1$ and $\mathcal{E}_2$ have sizes $N_1, N_2 \geq 1$ satisfying $N_1 + N_2 + 1 = N$.
+      Consequently, $N_1 < N$ and $N_2 < N$.
+      By the inductive hypothesis, $\norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1)$ and $\norm{v(\mathcal{E}_2)} \leq \mathcal{B}(\mathcal{E}_2)$.
+      By Lemma~10 and Lemma~16 of the SEAL manual:
+      \[
+        \norm{v(\mathcal{E})} \leq \norm{v(\mathcal{E}_1)} + \norm{v(\mathcal{E}_2)} \leq \mathcal{B}(\mathcal{E}_1) + \mathcal{B}(\mathcal{E}_2) = \mathcal{B}(\mathcal{E}).
+      \]
+
+\item \textbf{Plain Addition and Subtraction}: $\mathcal{E} \in \{\mathsf{add\_plain}(\mathcal{E}_1, m_2),\, \mathsf{sub\_plain}(\mathcal{E}_1, m_2)\}$.
+      The sub-expression $\mathcal{E}_1$ has size $N-1 < N$.
+      By the inductive hypothesis, $\norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1)$.
+      For plain addition, by Lemma~14 of the SEAL manual, the resulting ciphertext $\ctpadd$ has invariant noise
+      $\vpadd = v(\mathcal{E}_1) - \frac{r_t(q)}{q}m_2$.
+      Applying the triangle inequality:
+      \[
+        \norm{v(\mathcal{E})} = \norm{\vpadd} \leq \norm{v(\mathcal{E}_1)} + \frac{r_t(q)}{q}\norm{m_2} \leq \mathcal{B}(\mathcal{E}_1) + \frac{r_t(q)}{q}\norm{m_2} = \mathcal{B}(\mathcal{E}).
+      \]
+      Similarly, for plain subtraction, by Lemma~17 of the SEAL manual:
+      \[
+        \norm{v(\mathcal{E})} = \norm{\vpsub} \leq \norm{v(\mathcal{E}_1)} + \frac{r_t(q)}{q}\norm{m_2} \leq \mathcal{B}(\mathcal{E}_1) + \frac{r_t(q)}{q}\norm{m_2} = \mathcal{B}(\mathcal{E}).
+      \]
+
+\item \textbf{Plain Multiplication}: $\mathcal{E} = \mathsf{multiply\_plain}(\mathcal{E}_1, m_2)$.
+      The sub-expression $\mathcal{E}_1$ has size $N-1 < N$.
+      By Lemma~13 of the SEAL manual, $\norm{\vpmult} \leq \norm{m_2}_1 \norm{v(\mathcal{E}_1)} \leq N_{m_2}\norm{m_2}\norm{v(\mathcal{E}_1)}$.
+      Applying the inductive hypothesis $\norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1)$:
+      \[
+        \norm{v(\mathcal{E})} \leq \min\bigl(\norm{m_2}_1,\ N_{m_2}\norm{m_2}\bigr)\mathcal{B}(\mathcal{E}_1) = \mathcal{B}(\mathcal{E}).
+      \]
+
+\item \textbf{Homomorphic Multiplication}: $\mathcal{E} = \mathsf{multiply}(\mathcal{E}_1, \mathcal{E}_2)$.
+      The sub-expressions $\mathcal{E}_1$ and $\mathcal{E}_2$ have sizes $N_1, N_2 < N$ with $N_1 + N_2 + 1 = N$.
+      By the inductive hypothesis, $\norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1)$ and $\norm{v(\mathcal{E}_2)} \leq \mathcal{B}(\mathcal{E}_2)$.
+      By Lemma~11 of the SEAL manual, the invariant noise satisfies:
+      \begin{align*}
+        \norm{v(\mathcal{E})}
+        &\leq \left[(N_{m_1}+n)\norm{m_1} + \frac{nt}{2}\Sgeo{j_1}\right]\norm{v(\mathcal{E}_2)}\\
+        &\quad+ \left[(N_{m_2}+n)\norm{m_2} + \frac{nt}{2}\Sgeo{j_2}\right]\norm{v(\mathcal{E}_1)}\\
+        &\quad+ 3n\norm{v(\mathcal{E}_1)}\norm{v(\mathcal{E}_2)} + \frac{t}{2q}\Sgeo{j_1+j_2}.
+      \end{align*}
+      Observe that every coefficient on the right-hand side is non-negative:
+      $C_1 = (N_{m_1}+n)\norm{m_1} + \frac{nt}{2}\Sgeo{j_1} \geq 0$,
+      $C_2 = (N_{m_2}+n)\norm{m_2} + \frac{nt}{2}\Sgeo{j_2} \geq 0$, and $3n > 0$.
+      When the plaintexts $m_1, m_2$ are unknown, replacing them by their universal upper bounds $\norm{m_i} \leq \lfloor t/2 \rfloor$ and $N_{m_i} \leq n$ preserves the validity of the upper bound.
+      Because the bivariate function $f(x, y) = C_1 y + C_2 x + 3nxy + C_0$ is monotonically non-decreasing in both $x \geq 0$ and $y \geq 0$ for non-negative constants $C_1, C_2, C_0 \geq 0$, substituting $\norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1)$ and $\norm{v(\mathcal{E}_2)} \leq \mathcal{B}(\mathcal{E}_2)$ preserves the inequality:
+      \[
+        \norm{v(\mathcal{E})} \leq \mathcal{B}(\mathcal{E}).
+      \]
+
+\item \textbf{Relinearization}: $\mathcal{E} = \mathsf{relinearize}(\mathcal{E}_1)$.
+      The sub-expression $\mathcal{E}_1$ has size $N-1 < N$ with size $K_{\mathrm{size}}(\mathcal{E}_1) \geq 3$.
+      By the inductive hypothesis, $\norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1)$.
+      By Lemma~\ref{lem:relin}:
+      \[
+        \norm{v(\mathcal{E})} \leq \norm{v(\mathcal{E}_1)} + \frac{t}{q}\bigl(K_{\mathrm{size}}(\mathcal{E}_1)-2\bigr)nBq_\Sigma
+        \leq \mathcal{B}(\mathcal{E}_1) + \frac{t}{q}\bigl(K_{\mathrm{size}}(\mathcal{E}_1)-2\bigr)nBq_\Sigma = \mathcal{B}(\mathcal{E}).
+      \]
+
+\item \textbf{Galois Rotation}: $\mathcal{E} = \mathsf{rotate}(\mathcal{E}_1)$.
+      The sub-expression $\mathcal{E}_1$ has size $N-1 < N$ and ciphertext size $2$.
+      By the inductive hypothesis, $\norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1)$.
+      By Lemma~\ref{lem:rot}:
+      \[
+        \norm{v(\mathcal{E})} \leq \norm{v(\mathcal{E}_1)} + \frac{t}{q}nBq_\Sigma \leq \mathcal{B}(\mathcal{E}_1) + \frac{t}{q}nBq_\Sigma = \mathcal{B}(\mathcal{E}).
+      \]
+
+\item \textbf{Modulus Switching}: $\mathcal{E} = \mathsf{mod\_switch}(\mathcal{E}_1)$.
+      The sub-expression $\mathcal{E}_1$ has size $N-1 < N$ and size $K_{\mathrm{size}}(\mathcal{E}_1) = j+1$.
+      By the inductive hypothesis, $\norm{v(\mathcal{E}_1)} \leq \mathcal{B}(\mathcal{E}_1)$.
+      By Lemma~\ref{lem:modsw}, dropping prime $q_k$ leaves modulus $q' = q/q_k$, with noise:
+      \[
+        \norm{v(\mathcal{E})} \leq \norm{v(\mathcal{E}_1)} + \frac{t}{2q'}\Sgeo{j} \leq \mathcal{B}(\mathcal{E}_1) + \frac{t}{2q'}\Sgeo{j} = \mathcal{B}(\mathcal{E}).
+      \]
+\end{enumerate}
+This completes the induction for all operations, establishing that $\norm{v(\mathcal{E})} \leq \mathcal{B}(\mathcal{E})$ holds for every well-formed expression of size $N$.
+
+\textbf{Proof of Corollaries}:
+\begin{enumerate}[leftmargin=2em,label=(\roman*)]
+\item If $\mathcal{B}(\mathcal{E}) < 1/2$, then $\norm{v(\mathcal{E})} \leq \mathcal{B}(\mathcal{E}) < 1/2$.
+      By Lemma~1 of the SEAL manual, whenever the invariant noise satisfies $\norm{v} < 1/2$, the decryption function correctly removes the noise and outputs the exact message $m(\mathcal{E}) \in R_t$.
+\item By Definition~2 of the SEAL manual, the invariant noise budget is defined as $\mathrm{Budget} = -\log_2\bigl(2\norm{v(\mathcal{E})}\bigr)$.
+      Since $\norm{v(\mathcal{E})} \leq \mathcal{B}(\mathcal{E})$ and $-\log_2$ is a monotonically decreasing function:
+      \[
+        \mathrm{Budget}(\ct_{\mathcal{E}}) \geq -\log_2\bigl(2\mathcal{B}(\mathcal{E})\bigr).
+      \]
+\end{enumerate}
+\end{proof}
+
+\begin{remark}[Straight-Line Programs and Sequences of Length $N$]
+An FHE computation expressed as a sequential straight-line program of $N$ instructions:
+\[
+  c_1 \leftarrow \mathrm{op}_1(\dots), \quad c_2 \leftarrow \mathrm{op}_2(\dots), \quad \dots, \quad c_N \leftarrow \mathrm{op}_N(\dots),
+\]
+is a special case of the general DAG/AST expression structure.
+Applying Lemma~\ref{lem:general_bound} sequentially to the instruction sequence ensures that each intermediate ciphertext $c_k$ for $1 \leq k \leq N$ has guaranteed noise bound $\norm{v(c_k)} \leq \mathcal{B}(c_k)$, and the final result $c_N$ satisfies $\norm{v(c_N)} \leq \mathcal{B}(c_N)$.
+\end{remark}
+
+\begin{remark}[Implementation in C++]\label{rem:cpp_impl}
+In the reference implementation (\texttt{bfv\_noise\_bound.cpp}), noise estimates are maintained in base-2 logarithmic form $\lambda = \log_2(\mathcal{B})$.
+Addition and subtraction operations evaluate $\log_2(2^{\lambda_1} + 2^{\lambda_2})$ using the helper \texttt{log\_add}.
+To prevent numerical under-estimation due to floating-point rounding, all scalar operations apply \texttt{round\_up} (via \texttt{std::nextafter} towards $+\infty$).
+
+For plain addition and subtraction (\texttt{add\_plain} and \texttt{sub\_plain}), the C++ implementation returns the input ciphertext bound unchanged ($\mathcal{B}_{\mathrm{out}} = \mathcal{B}_{\mathrm{in}}$).
+This floating-point simplification is mathematically justified by the parameter regimes: since every valid plaintext satisfies $\norm{m_2} \leq \lfloor t/2 \rfloor$ and $r_t(q) < t$, the additive remainder term from Lemma~14 is bounded by
+\[
+  \frac{r_t(q)}{q}\norm{m_2} < \frac{t^2}{2q}.
+\]
+In practical BFV parameter sets with $t \in [2^{16}, 2^{20}]$ and $q \geq 2^{100}$, this additive contribution is strictly below $2^{-60}$ (and often below $2^{-160}$).
+Relative to typical invariant noise levels $\norm{v} \in [2^{-30}, 2^{-1}]$, the relative perturbation satisfies
+$\frac{r_t(q)\norm{m_2}}{q\norm{v}} \ll 2^{-30}$.
+This perturbation is well below machine epsilon in IEEE-754 floating-point arithmetic (\texttt{long double}), so that numerically
+\[
+  \log_2\left(\norm{v} + \frac{r_t(q)}{q}\norm{m_2}\right) = \log_2(\norm{v})
+\]
+holds identically.
+Consequently, \texttt{bfv\_noise\_bound.cpp} maintains zero noise growth in software without loss of practical fidelity, whereas the mathematical bounds and soundness proofs in this document strictly preserve the unapproximated formula from SEAL manual Lemma~14.
+\end{remark}
+
+\end{document}

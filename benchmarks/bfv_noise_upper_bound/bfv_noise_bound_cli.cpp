@@ -1,4 +1,4 @@
-#include "ufhe/seal_backend/bfv_noise_estimator.hpp"
+#include "ufhe/seal_backend/bfv_noise_bound.hpp"
 
 #include "seal/seal.h"
 #include <cctype>
@@ -427,7 +427,7 @@ int main(int argc, char **argv)
     Value value = builder.build(root);
     std::vector<ufhe::seal_backend::BFVNoiseExpression::Ptr> ciphertexts;
     collect_ciphertexts(value, ciphertexts);
-    ufhe::seal_backend::BFVNoiseEstimator estimator(context);
+    ufhe::seal_backend::BFVNoiseBound estimator(context);
     int remaining_bits = std::numeric_limits<int>::max();
     bool decryptable = true;
     for (const auto &ciphertext : ciphertexts)

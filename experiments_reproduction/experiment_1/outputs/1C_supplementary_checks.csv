@@ -1,0 +1,4 @@
+Variant,Rows,coef Multiplicative Depth,coef Depth,coef negate,MAE,MSE,RMSE,R2,R2_uncentered
+"in-sample, all rows (primary)",15824,33.382963,1.197989,1.027862,2.242131,9.060170,3.010012,0.985112,0.998137
+"in-sample, refit without budget-exhausted rows",15822,33.468722,1.178767,1.020833,2.221457,8.255624,2.873260,0.986170,0.998297
+"5-fold CV out-of-fold, all rows (seed 0)",15824,,,,2.243307,9.080628,3.013408,0.985078,0.998133
