@@ -71,6 +71,7 @@ def train_agent(
     n_steps: int = 2048,
     rules_subset: str = "all",
     run_tag: str = None,
+    preferences: list = None,
 ):
     set_random_seed(seed)
     
@@ -80,6 +81,11 @@ def train_agent(
     if rules_subset == "ops" or pref_mode == "single":
         pref_list = [[1.0, 0.0]]
         print(f"[Preferences] Single-objective / Stage 1 (Ops Agent): preference fixed to speed focus: {pref_list}")
+    elif preferences:
+        # Explicit list from --preferences (overrides --n_pref). The first vector is the
+        # one n_cycle biases towards, so keep [1.0, 0.0] first for speed-focus bias.
+        pref_list = [[float(w_ops), float(w_keys)] for w_ops, w_keys in preferences]
+        print(f"[Preferences] Using {len(pref_list)} explicit preference vectors (--preferences): {pref_list}")
     elif n_pref == 9:
         # Drop 2 least important extreme-keys vectors ([0.1, 0.9] and [0.2, 0.8])
         # Preserves speed focus [1.0, 0.0], balanced [0.5, 0.5], down to [0.3, 0.7] (8 vectors)

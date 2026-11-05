@@ -42,6 +42,22 @@ from .config import (
 from .baseline.run_baseline import run_agent as run_agent_baseline
 
 
+def _parse_preferences(text):
+    """'1.0,0.0;0.9,0.1' -> [[1.0, 0.0], [0.9, 0.1]] (None if text is empty)."""
+    if not text:
+        return None
+    prefs = []
+    for pair in text.split(";"):
+        parts = [p.strip() for p in pair.split(",")]
+        if len(parts) != 2:
+            raise ValueError(f"--preferences: expected 'w_ops,w_keys', got {pair!r}")
+        w_ops, w_keys = float(parts[0]), float(parts[1])
+        if abs(w_ops + w_keys - 1.0) > 1e-6:
+            raise ValueError(f"--preferences: {pair!r} does not sum to 1")
+        prefs.append([w_ops, w_keys])
+    return prefs
+
+
 def parse_arguments(args=None):
     """Parse command line arguments"""
     global framework_parser
@@ -256,6 +272,14 @@ def parse_arguments(args=None):
         choices=["all", "ops", "rotations"],
         default="all",
         help="Rule subset to train on: 'all' (joint pipeline), 'ops' (separated Stage 1), 'rotations' (separated Stage 2)",
+    )
+    train_parser.add_argument(
+        "--preferences",
+        type=str,
+        default=None,
+        help="Explicit preference vectors to train on, as 'w_ops,w_keys' pairs separated by ';' "
+             "(e.g. '1.0,0.0;0.9,0.1;0.8,0.2;0.6,0.4'). Overrides --n_pref. Keep [1.0,0.0] first: "
+             "it is the vector --n_cycle biases towards. Default: the --n_pref grid",
     )
     train_parser.add_argument(
         "--run_tag",
@@ -595,6 +619,7 @@ def main(args=None):
                 n_steps=parsed_args.n_steps,
                 rules_subset=getattr(parsed_args, "rules_subset", "all"),
                 run_tag=getattr(parsed_args, "run_tag", None),
+                preferences=_parse_preferences(getattr(parsed_args, "preferences", None)),
             )
 
     # ─────────────────────────────── TEST ─────────────────────────────
