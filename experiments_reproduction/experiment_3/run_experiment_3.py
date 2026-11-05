@@ -6,7 +6,7 @@ constraint (RL/fhe_rl/env_unified.py, fheEnvUnified) directly from its repositor
 location.
 
 Execution:
-    python experiments_reproduction/experiment_3/run_experiment_3.py
+    python experiments_reproduction/experiment_3/run_experiment_3.py [--source auto|unified|legacy]
 
 Methodology:
     1. Instantiates `fheEnvUnified` directly from `RL/fhe_rl/env_unified.py`
@@ -14,14 +14,19 @@ Methodology:
        environment execution and demonstrate trajectory rollback selection.
     2. Generates the synthetic near-threshold benchmark (60 VecLang expressions:
        20 targeting B=230, 20 targeting B=236, 20 targeting B=369 with initial noise
-       within 80-100% of the target budget) using `NoiseEstimator` and `pytrs`.
+       within 80-100% of the target budget) using `NoiseEstimator` and `pytrs`, and
+       checks it against RL/fhe_rl/datasets/threshold_benchmarks.txt (the evaluated set).
     3. Compares the noise distributions of the original 69-expression benchmark and
        the synthetic threshold benchmark against finite budget thresholds.
     4. Audits trajectory checkpoints step-by-step from raw trajectory strings
-       (`Trajectory Costs`, `Trajectory Noises`) across all 180 evaluation episodes,
-       verifying that the mathematical rollback selection rule exactly reproduces
-       `Safe Final Cost`, `Safe Final Noise`, `Best Valid Step`, and `Safety Activated`
-       with 0 mismatches.
+       (`Trajectory Costs`, `Trajectory Noises`) across all threshold evaluation episodes:
+           legacy  : recomputes the lowest-cost-within-budget rule and compares it with
+                     `Safe Final Cost`, `Safe Final Noise`, `Best Valid Step`, `Safety Activated`.
+           unified : the rollback picks the best state by w_ops*ops/ops0 + w_keys*keys and
+                     requires a BFV certificate; trajectories store neither per-step
+                     ops/keys nor certificates, so the audit checks consistency instead
+                     (safe state = trajectory state at `Best Valid Step`, within budget or
+                     fallback to the input, `Safety Activated` = best step != last step).
     5. Evaluates Safe Cost Reduction (%) on initially within-budget expressions for:
            - Unconstrained + Safety
            - Constrained (V5 Lag-PID + NATO-SC) + Safety
@@ -30,8 +35,20 @@ Methodology:
        compares raw final RL output violation rates against post-rollback rates.
     7. Evaluates full agent ablation with rollback on the original 69-expression
        benchmark across all 6 agent variants on initially within-budget expressions.
-    8. Emits structured CSV files, high-resolution plots, markdown report
+    8. For parts 5 and 7 (when the results have them), reports the two MORL objectives
+       of the rolled-back programs:
+           Exec cost reduction (%) = 100 * (Initial Ops - Safe Final Ops) / Initial Ops
+               (Ops = C_exec = exec_cost_mo, the execution-time cost model)
+           Rotation keys           = Safe Final Keys (C_keys = unique rotation keys)
+       plus a per-preference breakdown (w_ops, w_keys) on the threshold set.
+    9. Emits structured CSV files, high-resolution plots, markdown report
        (exp3_results.md), and execution metadata (run_metadata.json).
+
+Result sources (--source):
+    unified  results/ablation_unified/<agent>/eval_<jobid>/{original,threshold}.csv
+             (scripts/ablation_unified/eval_*.sbatch): exec/keys split, 10 preferences.
+    legacy   hpc_results/rl_test_results/{original,threshold}_<tag>.xlsx (no exec/keys).
+    auto     unified when results exist for all 6 agents, else legacy (default).
 
 Exit codes: 0 ok | 1 unexpected error | 2 data/validation error
 """
@@ -75,7 +92,7 @@ REPO_ROOT = HERE.parents[1]  # experiments_reproduction/experiment_3 -> repo roo
 RL_DIR = REPO_ROOT / "RL"
 PYTRS_DIR = RL_DIR / "pytrs"
 
-for p in [str(RL_DIR), str(PYTRS_DIR)]:
+for p in [str(RL_DIR), str(PYTRS_DIR), str(HERE.parent)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -97,24 +114,32 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+import objective_metrics as om
+from objective_metrics import EXEC_LABEL, KEYS_LABEL
+
 DEFAULT_RESULTS = REPO_ROOT / "hpc_results" / "rl_test_results"
+DEFAULT_UNIFIED = REPO_ROOT / "results" / "ablation_unified"
 DEFAULT_ORIG_BENCHMARK = RL_DIR / "fhe_rl" / "datasets" / "benchmarks.txt"
+DEFAULT_THRESH_DATASET = RL_DIR / "fhe_rl" / "datasets" / "threshold_benchmarks.txt"
 DEFAULT_OUT = HERE / "outputs"
 
 BUDGETS = [230, 236, 369]
 ALL_BUDGETS = [230, 236, 369, 9_000_000]
+BUDGET_LABEL = {230: "230", 236: "236", 369: "369", 9_000_000: "9M"}
 
 ABLATION_AGENTS = {
-    "Unconstrained": ("original_unconstrained.xlsx", "threshold_unconstrained.xlsx", "Prior-work unconstrained agent"),
-    "V4 Margin Barrier": ("original_v4_mb_B.xlsx", "threshold_v4_mb_B.xlsx", "--method margin_barrier, encoding raw"),
-    "V4 Noise Masking": ("original_v4_nmask_B.xlsx", "threshold_v4_nmask_B.xlsx", "--method noise_masking, encoding embed"),
-    "V4 MB + FiLM": ("original_v4_mb_film_B.xlsx", "threshold_v4_mb_film_B.xlsx", "--method margin_barrier, encoding film"),
-    "V5 FOCOPS + NATO-SC": ("original_v5_focops_natosc.xlsx", "threshold_v5_focops_natosc.xlsx", "--method nato_sc, algo focops, film"),
-    "V5 Lag-PID + NATO-SC": ("original_v5_lagpid_natosc.xlsx", "threshold_v5_lagpid_natosc.xlsx", "--method nato_sc, algo lagrangian_pid, film (selected)"),
+    "Unconstrained": "Prior-work unconstrained agent",
+    "V4 Margin Barrier": "--method margin_barrier, encoding raw",
+    "V4 Noise Masking": "--method noise_masking, encoding embed",
+    "V4 MB + FiLM": "--method margin_barrier, encoding film",
+    "V5 FOCOPS + NATO-SC": "--method nato_sc, algo focops, film",
+    "V5 Lag-PID + NATO-SC": "--method nato_sc, algo lagrangian_pid, film (selected)",
 }
 
 CONSTRAINED_NAME = "V5 Lag-PID + NATO-SC"
 UNCONSTRAINED_NAME = "Unconstrained"
+UNC_SAFE = "Unconstrained + Safety"
+CON_SAFE = "Constrained (Lag-PID) + Safety"
 
 
 class DataError(Exception):
@@ -339,10 +364,52 @@ def run_live_unified_agent_demo(benchmark_expr: str, budget: float = 230.0) -> d
 
 
 # --------------------------------------------------------------------------- #
+# Result loading
+# --------------------------------------------------------------------------- #
+def load_results(source: str, label: str, set_name: str, data_dir: Path, unified_dir: Path,
+                 required: bool = True) -> tuple[pd.DataFrame | None, Path | None]:
+    try:
+        path = om.agent_file(source, label, set_name, data_dir, unified_dir)
+    except om.SourceError as exc:
+        if required:
+            raise DataError(f"[{label}] {exc}")
+        return None, None
+    if not path.is_file():
+        if required:
+            raise DataError(f"[{label}] missing results: {path}")
+        return None, None
+    df = om.read_results(path)
+    need = ["Budget", "Expression #", "Is Feasible", "Initial Noise", "Agent Violated",
+            "Safe Cost Reduction (%)", "Safe Violated"]
+    missing = [c for c in need if c not in df.columns]
+    if missing:
+        raise DataError(f"[{label}] {path.name}: missing columns {missing}")
+    problems = om.check_objectives(df, label)
+    if problems:
+        raise DataError("; ".join(problems))
+    return df, path
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# --------------------------------------------------------------------------- #
 # Rollback Trajectory Audit
 # --------------------------------------------------------------------------- #
-def audit_rollback_trajectories(df: pd.DataFrame, agent_name: str) -> tuple[pd.DataFrame, int]:
-    """Audits trajectory strings step-by-step against Safe Final Cost/Noise columns."""
+def audit_rollback_trajectories(df: pd.DataFrame, agent_name: str, mode: str = "legacy") -> tuple[pd.DataFrame, int]:
+    """Audits trajectory strings step-by-step against Safe Final Cost/Noise columns.
+
+    mode="legacy":  recompute the lowest-cost-within-budget rule (the rule used by those runs).
+    mode="unified": the unified rollback ranks states by the preference score on ops/keys and
+                    needs a BFV certificate, neither of which the trajectory strings store; check
+                    that the reported safe state is the trajectory state at `Best Valid Step`, is
+                    within budget (or is the input fallback), and that `Safety Activated` agrees.
+    """
     records = []
     mismatches = 0
 
@@ -352,23 +419,31 @@ def audit_rollback_trajectories(df: pd.DataFrame, agent_name: str) -> tuple[pd.D
         costs = [float(c) for c in str(row["Trajectory Costs"]).split("|")]
         noises = [float(n) for n in str(row["Trajectory Noises"]).split("|")]
 
-        valid_indices = [i for i, n in enumerate(noises) if n <= budget]
-        if valid_indices:
-            best_i = min(valid_indices, key=lambda i: costs[i])
-            recomputed_cost = costs[best_i]
-            recomputed_noise = noises[best_i]
-            recomputed_step = best_i
-            safety_act = (best_i != len(costs) - 1)
-        else:
-            recomputed_cost = costs[0]
-            recomputed_noise = noises[0]
-            recomputed_step = 0
-            safety_act = True
-
         actual_safe_cost = float(row["Safe Final Cost"])
         actual_safe_noise = float(row["Safe Final Noise"])
         actual_best_step = int(row["Best Valid Step"])
         actual_safety_act = bool(row["Safety Activated"])
+
+        if mode == "legacy":
+            valid_indices = [i for i, n in enumerate(noises) if n <= budget]
+            if valid_indices:
+                best_i = min(valid_indices, key=lambda i: costs[i])
+                recomputed_cost = costs[best_i]
+                recomputed_noise = noises[best_i]
+                recomputed_step = best_i
+                safety_act = (best_i != len(costs) - 1)
+            else:
+                recomputed_cost = costs[0]
+                recomputed_noise = noises[0]
+                recomputed_step = 0
+                safety_act = True
+        else:
+            in_range = 0 <= actual_best_step < len(costs)
+            recomputed_step = actual_best_step if in_range else -1
+            recomputed_cost = costs[actual_best_step] if in_range else float("nan")
+            recomputed_noise = noises[actual_best_step] if in_range else float("nan")
+            safety_act = (actual_best_step != len(costs) - 1)
+            within = in_range and (noises[actual_best_step] <= budget or actual_best_step == 0)
 
         cost_match = abs(recomputed_cost - actual_safe_cost) < 1e-3
         noise_match = abs(recomputed_noise - actual_safe_noise) < 1e-2
@@ -376,13 +451,19 @@ def audit_rollback_trajectories(df: pd.DataFrame, agent_name: str) -> tuple[pd.D
         act_match = (safety_act == actual_safety_act)
 
         match = cost_match and noise_match and step_match and act_match
+        if mode != "legacy":
+            match = match and within
         if not match:
             mismatches += 1
 
-        records.append({
+        rec = {
             "Agent": agent_name,
             "Budget": int(budget),
             "Expression #": expr_num,
+        }
+        if "w_ops" in row and pd.notna(row.get("w_ops")):
+            rec["w_ops"], rec["w_keys"] = row["w_ops"], row["w_keys"]
+        rec.update({
             "Trajectory Steps": len(costs) - 1,
             "Best Valid Step Recomputed": recomputed_step,
             "Best Valid Step Actual": actual_best_step,
@@ -394,6 +475,7 @@ def audit_rollback_trajectories(df: pd.DataFrame, agent_name: str) -> tuple[pd.D
             "Safety Activated Actual": actual_safety_act,
             "Audit Match": match,
         })
+        records.append(rec)
 
     return pd.DataFrame(records), mismatches
 
@@ -409,20 +491,73 @@ def df_to_markdown(df: pd.DataFrame) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Objective tables (exec cost & rotation keys after rollback)
+# --------------------------------------------------------------------------- #
+def safe_objectives_row(agent: str, df: pd.DataFrame, budgets: list[int]) -> dict:
+    """Safe exec-cost reduction and avg rotation keys per budget on within-budget rows."""
+    within = df[df["Is Feasible"]]
+    row = {"Agent": agent}
+    ex, ks = [], []
+    for b in budgets:
+        st = om.objective_stats(within[within["Budget"] == b], "Safe")
+        row[f"B={BUDGET_LABEL[b]} {EXEC_LABEL}"] = round(st["exec_red"], 2)
+        row[f"B={BUDGET_LABEL[b]} avg keys"] = round(st["keys"], 2)
+        ex.append(st["exec_red"])
+        ks.append(st["keys"])
+    row[f"Average {EXEC_LABEL}"] = round(float(np.mean(ex)), 2)
+    row["Average keys"] = round(float(np.mean(ks)), 2)
+    return row
+
+
+def compact(t: pd.DataFrame, budgets: list[int]) -> pd.DataFrame:
+    rows = []
+    for _, r in t.iterrows():
+        row = {"Agent": r["Agent"]}
+        for b in budgets:
+            lb = BUDGET_LABEL[b]
+            row[f"B={lb}"] = f"{r[f'B={lb} {EXEC_LABEL}']:.2f}% / {r[f'B={lb} avg keys']:.2f}"
+        row["Average"] = f"{r[f'Average {EXEC_LABEL}']:.2f}% / {r['Average keys']:.2f}"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+OBJ_EXPLAIN = (
+    "Each cell is `exec cost reduction (%) / average rotation keys` of the **rolled-back** program "
+    "(`Safe *` columns), on initially within-budget expressions. "
+    "Exec cost = `C_exec` (`exec_cost_mo`, the execution-time cost model), reduction = "
+    "`100 * (Initial Ops - Safe Final Ops) / Initial Ops` (higher is better). "
+    "Rotation keys = `C_keys`, unique rotation (Galois) keys of the program (lower is better; inputs start with 0). "
+    "Cost-model values, not measured SEAL run times. Means over expressions x preferences.\n"
+)
+
+
+# --------------------------------------------------------------------------- #
 # Main Reproduction Runner
 # --------------------------------------------------------------------------- #
 def main():
     parser = argparse.ArgumentParser(
         description="Reproduce Experiment 3 (Safety Rollback & Synthetic Near-Threshold Benchmark)."
     )
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_RESULTS, help="Path to HPC result workbooks")
+    parser.add_argument("--source", choices=["auto", "unified", "legacy"], default="auto",
+                        help="unified = results/ablation_unified (exec cost + rotation keys), legacy = hpc_results workbooks")
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_RESULTS, help="legacy: path to HPC result workbooks")
+    parser.add_argument("--unified-dir", type=Path, default=DEFAULT_UNIFIED,
+                        help="unified: results/ablation_unified (<agent>/eval_<job>/{original,threshold}.csv)")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT, help="Output root directory")
     parser.add_argument("--seed", type=int, default=7777, help="Random seed for benchmark generator")
     args = parser.parse_args()
+    try:
+        return run(args)
+    except DataError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
+
+def run(args) -> int:
     t_start = time.perf_counter()
     out_dir = args.out_dir
-    data_dir = args.data_dir
+    source = om.resolve_source(args.source, args.data_dir, args.unified_dir)
+    data_dir = args.unified_dir if source == "unified" else args.data_dir
 
     # Output subdirectories (clean names, NO 3A/3B/etc.)
     subdirs = {
@@ -439,7 +574,8 @@ def main():
     print("=" * 78)
     print("  EXPERIMENT 3: SAFETY ROLLBACK & SYNTHETIC NEAR-THRESHOLD BENCHMARK")
     print("=" * 78)
-    print(f"HPC Results Directory : {data_dir}")
+    print(f"Result Source         : {source}")
+    print(f"Results Directory     : {data_dir}")
     print(f"Output Directory      : {out_dir}")
     print(f"Unified Agent (4th)   : fheEnvUnified (RL/fhe_rl/env_unified.py)")
     print()
@@ -471,6 +607,14 @@ def main():
         for entry in thresh_entries:
             f.write(f"{entry['expression']}:{entry['name']}\n")
 
+    # Is the regenerated set the one the agents were evaluated on?
+    dataset_match = None
+    if DEFAULT_THRESH_DATASET.is_file():
+        with open(DEFAULT_THRESH_DATASET, "r", encoding="utf-8") as f:
+            ds = [l.strip().split(":")[0] for l in f if l.strip()]
+        dataset_match = ds == [e["expression"] for e in thresh_entries]
+        print(f"  Matches RL/fhe_rl/datasets/threshold_benchmarks.txt: {dataset_match}")
+
     comp_rows = []
     for b in BUDGETS:
         b_entries = [e for e in thresh_entries if e["target_budget"] == b]
@@ -495,17 +639,13 @@ def main():
 
     # Compare Noise Distributions: Original (69) vs Threshold (60)
     print("[3/6] Generating Noise Distribution Comparison Plot...")
-    orig_wb = data_dir / "original_v5_lagpid_natosc.xlsx"
-    thresh_wb = data_dir / "threshold_v5_lagpid_natosc.xlsx"
+    df_orig, orig_path = load_results(source, CONSTRAINED_NAME, "original", args.data_dir, args.unified_dir)
+    df_thresh, thresh_path = load_results(source, CONSTRAINED_NAME, "threshold", args.data_dir, args.unified_dir)
+    df_unc_thresh, unc_thresh_path = load_results(source, UNCONSTRAINED_NAME, "threshold", args.data_dir, args.unified_dir)
 
-    if not orig_wb.exists() or not thresh_wb.exists():
-        raise DataError(f"Missing required workbooks: {orig_wb} or {thresh_wb}")
-
-    df_orig = pd.read_excel(orig_wb)
-    df_thresh = pd.read_excel(thresh_wb)
-
-    orig_init_noises = df_orig[df_orig["Budget"] == 230]["Initial Noise"].values
-    thresh_init_noises = df_thresh[df_thresh["Budget"] == 230]["Initial Noise"].values
+    # one value per expression (unified results repeat each expression per preference)
+    orig_init_noises = df_orig[df_orig["Budget"] == 230].drop_duplicates("Expression #")["Initial Noise"].values
+    thresh_init_noises = df_thresh[df_thresh["Budget"] == 230].drop_duplicates("Expression #")["Initial Noise"].values
 
     fig, ax = plt.subplots(figsize=(10, 5.5), dpi=300)
     bins = np.linspace(0, 400, 41)
@@ -531,12 +671,11 @@ def main():
     print()
 
     # ----------------------------------------------------------------------- #
-    # Part 3: Rollback Trajectory Audit on All 180 Episodes
+    # Part 3: Rollback Trajectory Audit on All Threshold Episodes
     # ----------------------------------------------------------------------- #
-    print("[4/6] Auditing Trajectory Checkpoint Rollback Selection on 180 Episodes...")
-    audit_df_lag, lag_mismatches = audit_rollback_trajectories(df_thresh, CONSTRAINED_NAME)
-    df_unc_thresh = pd.read_excel(data_dir / "threshold_unconstrained.xlsx")
-    audit_df_unc, unc_mismatches = audit_rollback_trajectories(df_unc_thresh, UNCONSTRAINED_NAME)
+    print("[4/6] Auditing Trajectory Checkpoint Rollback Selection on threshold episodes...")
+    audit_df_lag, lag_mismatches = audit_rollback_trajectories(df_thresh, CONSTRAINED_NAME, mode=source)
+    audit_df_unc, unc_mismatches = audit_rollback_trajectories(df_unc_thresh, UNCONSTRAINED_NAME, mode=source)
 
     audit_combined = pd.concat([audit_df_lag, audit_df_unc], ignore_index=True)
     audit_csv_path = subdirs["rollback_audit"] / "rollback_trajectory_audit.csv"
@@ -545,7 +684,8 @@ def main():
 
     total_episodes_audited = len(audit_combined)
     total_mismatches = lag_mismatches + unc_mismatches
-    print(f"  Audited {total_episodes_audited} trajectory rollouts: {total_mismatches} mismatches (100% agreement).")
+    concordance = 1.0 - total_mismatches / total_episodes_audited if total_episodes_audited else float("nan")
+    print(f"  Audited {total_episodes_audited} trajectory rollouts: {total_mismatches} mismatches ({100 * concordance:.2f}% agreement).")
     print(f"  Audit report saved to {audit_csv_path.name}")
 
     # Generate Trajectory Demonstration Plot
@@ -573,7 +713,9 @@ def main():
     ax2.set_ylabel("Noise (bits)", color=color_noise, fontsize=12)
     ax2.tick_params(axis="y", labelcolor=color_noise)
 
-    ax1.set_title(f"Safety Rollback Trajectory Inspection (Expr #{sample_row['Expression #']}, Budget {b_sample})", fontsize=13, fontweight="bold", pad=12)
+    pref_tag = (f", w={om.pref_label(sample_row['w_ops'], sample_row['w_keys'])}"
+                if "w_ops" in sample_row and pd.notna(sample_row.get("w_ops")) else "")
+    ax1.set_title(f"Safety Rollback Trajectory Inspection (Expr #{sample_row['Expression #']}, Budget {b_sample}{pref_tag})", fontsize=13, fontweight="bold", pad=12)
     fig.tight_layout()
     traj_plot_path = subdirs["rollback_audit"] / "safety_rollback_trajectory_demo.png"
     fig.savefig(traj_plot_path)
@@ -607,14 +749,14 @@ def main():
 
     cr_compare_df = pd.DataFrame([
         {
-            "Agent": "Unconstrained + Safety",
+            "Agent": UNC_SAFE,
             "B=230 Safe CR%": round(unc_safe_crs[230], 2),
             "B=236 Safe CR%": round(unc_safe_crs[236], 2),
             "B=369 Safe CR%": round(unc_safe_crs[369], 2),
             "Average Safe CR%": round(unc_avg, 2),
         },
         {
-            "Agent": "Constrained (Lag-PID) + Safety",
+            "Agent": CON_SAFE,
             "B=230 Safe CR%": round(lag_safe_crs[230], 2),
             "B=236 Safe CR%": round(lag_safe_crs[236], 2),
             "B=369 Safe CR%": round(lag_safe_crs[369], 2),
@@ -642,8 +784,8 @@ def main():
     unc_vals = [unc_safe_crs[b] for b in BUDGETS]
     lag_vals = [lag_safe_crs[b] for b in BUDGETS]
 
-    rects1 = ax.bar(x - width/2, unc_vals, width, label="Unconstrained + Safety", color="#7293CB", edgecolor="black")
-    rects2 = ax.bar(x + width/2, lag_vals, width, label="Constrained (Lag-PID) + Safety", color="#E1974C", edgecolor="black")
+    rects1 = ax.bar(x - width/2, unc_vals, width, label=UNC_SAFE, color="#7293CB", edgecolor="black")
+    rects2 = ax.bar(x + width/2, lag_vals, width, label=CON_SAFE, color="#E1974C", edgecolor="black")
 
     for rect in rects1:
         h = rect.get_height()
@@ -658,7 +800,7 @@ def main():
     ax.set_xticks(x)
     ax.set_xticklabels([f"B = {b}" for b in BUDGETS], fontsize=11)
     ax.set_ylabel("Safe Cost Reduction (%)", fontsize=12)
-    ax.set_ylim(0, 50)
+    ax.set_ylim(0, max(50, float(np.nanmax(unc_vals + lag_vals)) * 1.15))
     ax.grid(True, linestyle=":", alpha=0.6, axis="y")
     ax.legend(loc="upper right", frameon=True)
     plt.tight_layout()
@@ -667,11 +809,44 @@ def main():
     fig.savefig(out_dir / "safe_cost_reduction_comparison.png")
     plt.close(fig)
 
+    # Exec cost & rotation keys after rollback on the threshold set
+    has_obj = om.has_objectives(df_thresh) and om.has_objectives(df_unc_thresh)
+    has_pref = has_obj and om.has_preferences(df_thresh) and om.has_preferences(df_unc_thresh)
+    thr_obj_df = thr_pref = thr_pref_sum = None
+    if has_obj:
+        thr_obj_df = pd.DataFrame([safe_objectives_row(UNC_SAFE, df_unc_thresh, BUDGETS),
+                                   safe_objectives_row(CON_SAFE, df_thresh, BUDGETS)])
+        p = subdirs["constrained_vs_unconstrained"] / "constrained_vs_unconstrained_safe_objectives.csv"
+        thr_obj_df.to_csv(p, index=False)
+        thr_obj_df.to_csv(out_dir / "constrained_vs_unconstrained_safe_objectives.csv", index=False)
+        om.plot_objectives_by_budget(
+            thr_obj_df, [BUDGET_LABEL[b] for b in BUDGETS], "Agent", "B={b} " + EXEC_LABEL, "B={b} avg keys",
+            "Exec Cost and Rotation Keys after Rollback (Within-Budget Threshold Expressions)",
+            subdirs["constrained_vs_unconstrained"] / "safe_objectives_comparison.png", highlight=CON_SAFE)
+        om.plot_objectives_by_budget(
+            thr_obj_df, [BUDGET_LABEL[b] for b in BUDGETS], "Agent", "B={b} " + EXEC_LABEL, "B={b} avg keys",
+            "Exec Cost and Rotation Keys after Rollback (Within-Budget Threshold Expressions)",
+            out_dir / "safe_objectives_comparison.png", highlight=CON_SAFE)
+        print(f"  Safe exec cost reduction (%) / avg rotation keys:\n{compact(thr_obj_df, BUDGETS).to_string(index=False)}")
+    if has_pref:
+        frames_thr = {UNC_SAFE: df_unc_thresh, CON_SAFE: df_thresh}
+        thr_pref = om.preference_table(frames_thr, [UNC_SAFE, CON_SAFE], BUDGETS, BUDGET_LABEL, "Safe",
+                                       within_only=True, cr_col="Safe Cost Reduction (%)", viol_col="Safe Violated")
+        thr_pref_sum = om.preference_summary(thr_pref)
+        pref_dir = out_dir / "preference_tradeoff"
+        pref_dir.mkdir(parents=True, exist_ok=True)
+        thr_pref.to_csv(pref_dir / "threshold_per_budget.csv", index=False, float_format="%.4f")
+        thr_pref_sum.to_csv(pref_dir / "threshold_summary.csv", index=False, float_format="%.4f")
+        om.plot_preference_tradeoff(thr_pref, "Exec Cost vs Rotation Keys per Preference\n(Threshold Set, After Rollback)",
+                                    pref_dir / "threshold_preference_tradeoff.png")
+    print()
+
     # ----------------------------------------------------------------------- #
     # Part 5: Violation Rate Before and After Rollback
     # ----------------------------------------------------------------------- #
     print("[6/6] Evaluating Violation Rates Before and After Rollback...")
     viol_rows = []
+    viol_vals = {}
     for agent_label, df_src in [("Unconstrained", df_unc_thresh), ("Constrained (Lag-PID)", df_thresh)]:
         w_df = df_src[df_src["Is Feasible"]]
         row = {"Agent": agent_label}
@@ -682,6 +857,7 @@ def main():
             safe_v = int(b_w["Safe Violated"].sum())
             row[f"B={b} before"] = f"{(raw_v / n_tot * 100.0):.1f}% ({raw_v}/{n_tot})"
             row[f"B={b} after"] = f"{(safe_v / n_tot * 100.0):.1f}% ({safe_v}/{n_tot})"
+            viol_vals[(agent_label, b)] = (raw_v / n_tot * 100.0, safe_v / n_tot * 100.0)
         viol_rows.append(row)
 
     viol_df = pd.DataFrame(viol_rows)
@@ -694,13 +870,9 @@ def main():
     # Plot Violation Rate Elimination
     fig, ax = plt.subplots(figsize=(8.5, 4.8), dpi=300)
     labels = ["Unconstrained (B=230)", "Constrained (B=230)", "Unconstrained (B=369)", "Constrained (B=369)"]
-    before_vals = [
-        (df_unc_thresh[(df_unc_thresh["Is Feasible"]) & (df_unc_thresh["Budget"] == 230)]["Agent Violated"].mean() * 100.0),
-        (df_thresh[(df_thresh["Is Feasible"]) & (df_thresh["Budget"] == 230)]["Agent Violated"].mean() * 100.0),
-        (df_unc_thresh[(df_unc_thresh["Is Feasible"]) & (df_unc_thresh["Budget"] == 369)]["Agent Violated"].mean() * 100.0),
-        (df_thresh[(df_thresh["Is Feasible"]) & (df_thresh["Budget"] == 369)]["Agent Violated"].mean() * 100.0),
-    ]
-    after_vals = [0.0, 0.0, 0.0, 0.0]
+    keys = [("Unconstrained", 230), ("Constrained (Lag-PID)", 230), ("Unconstrained", 369), ("Constrained (Lag-PID)", 369)]
+    before_vals = [viol_vals[k][0] for k in keys]
+    after_vals = [viol_vals[k][1] for k in keys]
 
     x_idx = np.arange(len(labels))
     w_bar = 0.35
@@ -712,14 +884,15 @@ def main():
         ax.annotate(f"{h:.1f}%", xy=(rect.get_x() + rect.get_width()/2, h), xytext=(0, 3),
                     textcoords="offset points", ha="center", va="bottom", fontsize=10, fontweight="bold")
     for rect in r_after:
-        ax.annotate("0.0%", xy=(rect.get_x() + rect.get_width()/2, 0), xytext=(0, 3),
+        h = rect.get_height()
+        ax.annotate(f"{h:.1f}%", xy=(rect.get_x() + rect.get_width()/2, h), xytext=(0, 3),
                     textcoords="offset points", ha="center", va="bottom", fontsize=10, fontweight="bold", color="#2ca02c")
 
     ax.set_title("Violation Rates Before and After Rollback on Within-Budget Threshold Programs", fontsize=12, fontweight="bold", pad=12)
     ax.set_xticks(x_idx)
     ax.set_xticklabels(labels, fontsize=9.5, rotation=10)
     ax.set_ylabel("Violation Rate (%)", fontsize=12)
-    ax.set_ylim(0, 65)
+    ax.set_ylim(0, max(65, max(before_vals) * 1.15))
     ax.grid(True, linestyle=":", alpha=0.6, axis="y")
     ax.legend(loc="upper right", frameon=True)
     plt.tight_layout()
@@ -733,11 +906,13 @@ def main():
     # ----------------------------------------------------------------------- #
     print("Evaluating Agent Ablation with Rollback on Original Benchmark (69 expressions)...")
     ablation_rows = []
-    for agent_label, (orig_file, _, desc) in ABLATION_AGENTS.items():
-        wb_p = data_dir / orig_file
-        if not wb_p.exists():
+    ablation_obj_rows = []
+    used_files = {}
+    for agent_label in ABLATION_AGENTS:
+        df_agent, wb_p = load_results(source, agent_label, "original", args.data_dir, args.unified_dir, required=False)
+        if df_agent is None:
             continue
-        df_agent = pd.read_excel(wb_p)
+        used_files[agent_label] = wb_p
         within_df = df_agent[df_agent["Is Feasible"]]
 
         b_map = {}
@@ -759,6 +934,8 @@ def main():
             "Average Safe CR%": round(avg_safe_cr, 2),
             "Safe Violations": f"{safe_viols} ({viol_pct:.1f}%)",
         })
+        if om.has_objectives(df_agent):
+            ablation_obj_rows.append(safe_objectives_row(agent_label, df_agent, ALL_BUDGETS))
 
     ablation_df = pd.DataFrame(ablation_rows)
     ablation_csv = subdirs["original_benchmark_ablation"] / "safe_cr_ablation_original_benchmark.csv"
@@ -766,6 +943,22 @@ def main():
     ablation_df.to_csv(out_dir / "safe_cr_ablation_original_benchmark.csv", index=False)
     print(f"  Ablation Table (Original Benchmark + Rollback):\n{ablation_df.to_string(index=False)}")
     print()
+
+    ablation_obj_df = None
+    if ablation_obj_rows and len(ablation_obj_rows) == len(ablation_rows):
+        ablation_obj_df = pd.DataFrame(ablation_obj_rows)
+        p = subdirs["original_benchmark_ablation"] / "safe_objectives_ablation_original_benchmark.csv"
+        ablation_obj_df.to_csv(p, index=False)
+        ablation_obj_df.to_csv(out_dir / "safe_objectives_ablation_original_benchmark.csv", index=False)
+        for target in (subdirs["original_benchmark_ablation"] / "original_benchmark_safe_objectives_ablation.png",
+                       out_dir / "original_benchmark_safe_objectives_ablation.png"):
+            om.plot_objectives_by_budget(
+                ablation_obj_df, [BUDGET_LABEL[b] for b in ALL_BUDGETS], "Agent",
+                "B={b} " + EXEC_LABEL, "B={b} avg keys",
+                "Agent Ablation with Rollback: Exec Cost and Rotation Keys (Original Benchmark, Within Budget)",
+                target, highlight=CONSTRAINED_NAME)
+        print(f"  Safe exec cost reduction (%) / avg rotation keys:\n{compact(ablation_obj_df, ALL_BUDGETS).to_string(index=False)}")
+        print()
 
     # Plot Ablation Safe CR%
     fig, ax = plt.subplots(figsize=(10, 5.5), dpi=300)
@@ -784,7 +977,7 @@ def main():
     ax.set_yticklabels(agent_names, fontsize=11)
     ax.set_xlabel("Average Safe Cost Reduction (%) across Budgets", fontsize=12)
     ax.set_title("Agent Ablation: Safe Cost Reduction on Original Benchmark with Rollback", fontsize=13, fontweight="bold", pad=12)
-    ax.set_xlim(0, 90)
+    ax.set_xlim(0, max(90, max(cr_values) * 1.12))
     ax.grid(True, linestyle=":", alpha=0.6, axis="x")
     plt.tight_layout()
     ablation_plot_path = subdirs["original_benchmark_ablation"] / "original_benchmark_safe_cr_ablation.png"
@@ -795,26 +988,54 @@ def main():
     # ----------------------------------------------------------------------- #
     # Part 7: Write Markdown Summary Report & Metadata
     # ----------------------------------------------------------------------- #
+    n_pref = df_thresh.groupby(om.PREF_COLS).ngroups if has_pref else 1
     elapsed_total = time.perf_counter() - t_start
     report_path = out_dir / "exp3_results.md"
     with open(report_path, "w", encoding="utf-8") as rf:
         rf.write("# Experiment 3: Safety Rollback & Synthetic Near-Threshold Benchmark\n\n")
         rf.write(f"**Execution Timestamp:** {datetime.now(timezone.utc).isoformat()}\n")
         rf.write(f"**Unified Agent Model:** `fheEnvUnified` (RL/fhe_rl/env_unified.py)\n")
+        rf.write(f"**Result Source:** {source} (`{data_dir}`)\n")
+        if n_pref > 1:
+            rf.write(f"**Preferences:** {n_pref} per expression; rates and averages are over expressions x preferences\n")
         rf.write(f"**Total Runtime:** {elapsed_total:.2f} seconds\n\n")
 
         rf.write("## 1. Synthetic Near-Threshold Dataset Composition\n\n")
         rf.write(df_to_markdown(df_comp))
         rf.write("\n\n")
+        if dataset_match is not None:
+            rf.write(f"- Regenerated set (seed {args.seed}) "
+                     f"{'is identical to' if dataset_match else '**differs from**'} "
+                     "`RL/fhe_rl/datasets/threshold_benchmarks.txt`, the set the agents were evaluated on.\n\n")
 
         rf.write("## 2. Trajectory Rollback Audit Verification\n\n")
         rf.write(f"- **Total Episodes Audited:** {total_episodes_audited}\n")
-        rf.write(f"- **Mismatches Against Safe Final Output:** {total_mismatches} (100.0% mathematical concordance)\n")
-        rf.write("- **Selection Rule:** Lowest-cost intermediate state satisfying `noise <= budget`; fallback to initial expression if infeasible.\n\n")
+        rf.write(f"- **Mismatches Against Safe Final Output:** {total_mismatches} ({100 * concordance:.2f}% concordance)\n")
+        if source == "legacy":
+            rf.write("- **Selection Rule:** Lowest-cost intermediate state satisfying `noise <= budget`; fallback to initial expression if infeasible.\n\n")
+        else:
+            rf.write("- **Selection Rule (unified):** lowest `w_ops*ops/ops0 + w_keys*keys` among states with `noise <= budget` "
+                     "and a positive BFV certificate; fallback to the input expression.\n")
+            rf.write("- **Audit scope:** trajectories store cost and noise only (no per-step ops/keys or certificates), so the "
+                     "audit checks that the safe state is the trajectory state at `Best Valid Step`, within budget or the input "
+                     "fallback, and that `Safety Activated` agrees; it does not re-rank the states.\n\n")
 
         rf.write("## 3. Constrained vs Unconstrained Performance on Threshold Expressions\n\n")
         rf.write(df_to_markdown(cr_compare_df))
         rf.write("\n\n")
+        if thr_obj_df is not None:
+            rf.write("### Execution Cost and Rotation Keys after Rollback\n\n")
+            rf.write(OBJ_EXPLAIN + "\n")
+            rf.write(df_to_markdown(compact(thr_obj_df, BUDGETS)))
+            rf.write("\n\n![Safe Objectives](safe_objectives_comparison.png)\n\n")
+        else:
+            rf.write("> [!NOTE]\n> Execution cost and rotation keys are not reported: these legacy results store one scalar "
+                     "cost per step. Run `scripts/ablation_unified/eval_*.sbatch` and rerun with `--source unified`.\n\n")
+        if thr_pref_sum is not None:
+            rf.write("### Preference Trade-off on the Threshold Set (After Rollback)\n\n")
+            rf.write("Per preference `w = [w_ops, w_keys]`, averaged over B = 230, 236, 369, within-budget rows.\n\n")
+            rf.write(df_to_markdown(thr_pref_sum.round(2)))
+            rf.write("\n\n![Preference Trade-off](preference_tradeoff/threshold_preference_tradeoff.png)\n\n")
 
         rf.write("## 4. Violation Rates Before and After Rollback (Within-Budget Expressions)\n\n")
         rf.write(df_to_markdown(viol_df))
@@ -823,6 +1044,11 @@ def main():
         rf.write("## 5. Agent Ablation with Rollback on Original Benchmark\n\n")
         rf.write(df_to_markdown(ablation_df))
         rf.write("\n")
+        if ablation_obj_df is not None:
+            rf.write("\n### Execution Cost and Rotation Keys after Rollback\n\n")
+            rf.write(OBJ_EXPLAIN + "\n")
+            rf.write(df_to_markdown(compact(ablation_obj_df, ALL_BUDGETS)))
+            rf.write("\n\n![Ablation Objectives](original_benchmark_safe_objectives_ablation.png)\n")
 
     metadata = {
         "experiment": "Experiment 3 - Safety Rollback & Synthetic Near-Threshold Benchmark",
@@ -832,15 +1058,22 @@ def main():
         "python_version": sys.version,
         "torch_version": torch.__version__,
         "agent": "fheEnvUnified (4th RL Agent - Multi-Objective + Noise Constraint)",
+        "result_source": source,
+        "preferences_per_expression": n_pref,
+        "objectives": ({"exec_cost": "Safe Final Ops (C_exec, exec_cost_mo); reported as reduction vs Initial Ops",
+                        "rotation_keys": "Safe Final Keys (C_keys, unique rotation keys); reported as mean count"}
+                       if has_obj else "not available in these results"),
         "synthetic_benchmark": {
             "expressions_count": len(thresh_entries),
             "seed": args.seed,
             "budgets": BUDGETS,
+            "matches_dataset_file": dataset_match,
         },
         "audit": {
+            "mode": source,
             "total_episodes": total_episodes_audited,
             "mismatches": total_mismatches,
-            "concordance_rate": 1.0,
+            "concordance_rate": round(concordance, 6),
         },
         "threshold_safe_cr": {
             "constrained_lagpid_avg": round(lag_avg, 2),
@@ -848,7 +1081,15 @@ def main():
             "advantage_pp": round(adv_avg, 2),
         },
         "original_ablation_lagpid_safe_cr_avg": round(float(ablation_df.loc[ablation_df["Agent"] == CONSTRAINED_NAME, "Average Safe CR%"].values[0]), 2),
+        "result_files": {
+            "threshold": {CONSTRAINED_NAME: str(thresh_path), UNCONSTRAINED_NAME: str(unc_thresh_path)},
+            "original": {k: str(v) for k, v in used_files.items()},
+        },
     }
+    if thr_obj_df is not None:
+        metadata["threshold_safe_objectives"] = thr_obj_df.to_dict(orient="records")
+    if ablation_obj_df is not None:
+        metadata["original_ablation_safe_objectives"] = ablation_obj_df.to_dict(orient="records")
     with open(out_dir / "run_metadata.json", "w", encoding="utf-8") as mf:
         json.dump(metadata, mf, indent=2)
 
@@ -858,7 +1099,8 @@ def main():
     print(f"  Summary Report: {report_path.name}")
     print(f"  Metadata JSON : run_metadata.json")
     print("=" * 78)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

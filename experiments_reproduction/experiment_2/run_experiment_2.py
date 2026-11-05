@@ -6,7 +6,7 @@ constraint (RL/fhe_rl/env_unified.py, fheEnvUnified) directly from its repositor
 location.
 
 Execution:
-    python experiments_reproduction/experiment_2/run_experiment_2.py
+    python experiments_reproduction/experiment_2/run_experiment_2.py [--source auto|unified|legacy]
 
 Methodology:
     1. Instantiates `fheEnvUnified` directly from `RL/fhe_rl/env_unified.py` with
@@ -25,9 +25,22 @@ Methodology:
            - Initial budget status partition & within-budget violation analysis
            - Optimization quality on initially within-budget expressions
            - Constraint-method ablation across 6 methods
+           - The two MORL objectives for every part above (when the results have them):
+                 Exec cost reduction (%) = 100 * (Initial Ops - Agent Final Ops) / Initial Ops
+                     (Ops = C_exec = exec_cost_mo, the execution-time cost model)
+                 Rotation keys           = Agent Final Keys (C_keys = unique rotation keys)
+             plus a per-preference breakdown (w_ops, w_keys) for the unified agents.
     5. Outputs structured CSV files (subfolders & summaries), plots,
        exp2_results.md, and run_metadata.json with descriptive experiment names
        (no 2A/2B/etc. prefixes).
+
+Result sources (--source):
+    unified  results/ablation_unified/<agent>/eval_<jobid>/original.csv, written by
+             scripts/ablation_unified/eval_*.sbatch (`fhe_rl test --test_mode v2`):
+             exec/keys split and 10 preferences per expression.
+    legacy   hpc_results/rl_test_results/original_<tag>.xlsx (older runs: one scalar
+             cost, no exec/keys split; the objective tables are then skipped).
+    auto     unified when results exist for all 6 agents, else legacy (default).
 
 Exit codes: 0 ok | 1 unexpected error | 2 data/validation error
 """
@@ -62,7 +75,7 @@ REPO_ROOT = HERE.parents[1]  # experiments_reproduction/experiment_2 -> repo roo
 RL_DIR = REPO_ROOT / "RL"
 PYTRS_DIR = RL_DIR / "pytrs"
 
-for p in [str(RL_DIR), str(PYTRS_DIR)]:
+for p in [str(RL_DIR), str(PYTRS_DIR), str(HERE.parent)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -80,22 +93,39 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+import objective_metrics as om
+from objective_metrics import EXEC_LABEL, KEYS_LABEL
+
 DEFAULT_RESULTS = REPO_ROOT / "hpc_results" / "rl_test_results"
+DEFAULT_UNIFIED = REPO_ROOT / "results" / "ablation_unified"
 DEFAULT_BENCHMARK = RL_DIR / "fhe_rl" / "datasets" / "benchmarks.txt"
 DEFAULT_OUT = HERE / "outputs"
 
 BUDGETS = [230, 236, 369, 9_000_000]
 BUDGET_LABEL = {230: "230", 236: "236", 369: "369", 9_000_000: "9M"}
+BUDGET_LBLS = [BUDGET_LABEL[b] for b in BUDGETS]
 N_EXPR = 69
+MANUSCRIPT_LAGPID_AVG_CR = 60.87  # PFE value; only compared for the legacy results
 
-AGENTS = {
-    "Unconstrained": ("unconstrained", "prior-work agent agent_dynamic_llm_data.zip, budget-unaware, evaluated post hoc"),
-    "V4 Margin Barrier": ("v4_mb_B", "--method margin_barrier, encoding raw"),
-    "V4 Noise Masking": ("v4_nmask_B", "--method noise_masking, encoding embed"),
-    "V4 MB + FiLM": ("v4_mb_film_B", "--method margin_barrier, encoding film"),
-    "V5 FOCOPS + NATO-SC": ("v5_focops_natosc", "--method nato_sc, algo focops, film"),
-    "V5 Lag-PID + NATO-SC": ("v5_lagpid_natosc", "--method nato_sc, algo lagrangian_pid, film (selected)"),
+AGENT_CONFIG = {
+    "legacy": {
+        "Unconstrained": "prior-work agent agent_dynamic_llm_data.zip, budget-unaware, evaluated post hoc",
+        "V4 Margin Barrier": "--method margin_barrier, encoding raw",
+        "V4 Noise Masking": "--method noise_masking, encoding embed",
+        "V4 MB + FiLM": "--method margin_barrier, encoding film",
+        "V5 FOCOPS + NATO-SC": "--method nato_sc, algo focops, film",
+        "V5 Lag-PID + NATO-SC": "--method nato_sc, algo lagrangian_pid, film (selected)",
+    },
+    "unified": {
+        "Unconstrained": "unified agent trained without the constraint (ablation_unified/train_unconstrained.sbatch)",
+        "V4 Margin Barrier": "unified, --method margin_barrier, encoding raw",
+        "V4 Noise Masking": "unified, --method noise_masking, encoding embed",
+        "V4 MB + FiLM": "unified, --method margin_barrier, encoding film",
+        "V5 FOCOPS + NATO-SC": "unified, --method nato_sc, algo focops, film",
+        "V5 Lag-PID + NATO-SC": "unified reference unified_joint_noise_best_4.0M.zip (nato_sc, lagrangian_pid, film)",
+    },
 }
+AGENTS = list(AGENT_CONFIG["legacy"])
 UNC = "Unconstrained"
 CON = "V5 Lag-PID + NATO-SC"
 CON_LABEL = "Constrained (Lag-PID + NATO-SC)"
@@ -103,6 +133,9 @@ CON_LABEL = "Constrained (Lag-PID + NATO-SC)"
 REQUIRED_COLS = [
     "Budget", "Expression #", "Is Feasible", "Initial Cost", "Initial Noise",
     "Agent Final Cost", "Agent Final Noise", "Agent Cost Reduction (%)", "Agent Violated",
+]
+OPTIONAL_COLS = om.OBJECTIVE_COLS + om.PREF_COLS + [
+    "Expression Name", "Agent Ops Reduction (%)", "Safe Ops Reduction (%)",
 ]
 
 
@@ -200,40 +233,55 @@ def evaluate_initial_expressions_with_unified_model(
 
 
 # --------------------------------------------------------------------------- #
-# Loading & Validating Agent Evaluation Workbooks
+# Loading & Validating Agent Evaluation Results
 # --------------------------------------------------------------------------- #
 def load_agent(
-    results_dir: Path, label: str, tag: str, unified_baseline: pd.DataFrame
-) -> tuple[pd.DataFrame, Path]:
-    path = results_dir / f"original_{tag}.xlsx"
+    source: str, results_dir: Path, unified_dir: Path, label: str,
+    unified_baseline: pd.DataFrame, expressions: list[str],
+) -> tuple[pd.DataFrame, Path, float]:
+    """Load one agent's results on the original benchmark. Returns (frame, path, max noise diff)."""
+    try:
+        path = om.agent_file(source, label, "original", results_dir, unified_dir)
+    except om.SourceError as exc:
+        raise DataError(f"[{label}] {exc}")
     if not path.is_file():
-        raise DataError(f"[{label}] workbook not found: {path} (use --results-dir)")
-    df = pd.read_excel(path, sheet_name="all_results")
+        raise DataError(f"[{label}] results not found: {path} (use --results-dir / --unified-dir)")
+    df = om.read_results(path)
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
         raise DataError(f"[{label}] missing columns {missing} in {path.name}")
-    df = df[REQUIRED_COLS].copy()
-    df["Budget"] = df["Budget"].astype(int)
-    df["Agent Violated"] = df["Agent Violated"].astype(bool)
+    df = df[REQUIRED_COLS + [c for c in OPTIONAL_COLS if c in df.columns]].copy()
 
     got = sorted(df["Budget"].unique().tolist())
     if got != sorted(BUDGETS):
         raise DataError(f"[{label}] budgets {got}, expected {sorted(BUDGETS)}")
+    n_pref = df.groupby(om.PREF_COLS).ngroups if om.has_preferences(df) else 1
     for b in BUDGETS:
         sub = df[df["Budget"] == b]
-        if len(sub) != N_EXPR or sub["Expression #"].nunique() != N_EXPR:
-            raise DataError(f"[{label}] budget {b}: {len(sub)} rows / {sub['Expression #'].nunique()} expressions, expected {N_EXPR}")
+        if sub["Expression #"].nunique() != N_EXPR or len(sub) != N_EXPR * n_pref:
+            raise DataError(f"[{label}] budget {b}: {len(sub)} rows / {sub['Expression #'].nunique()} expressions, "
+                            f"expected {N_EXPR} expressions x {n_pref} preference(s)")
     if df[REQUIRED_COLS].isna().any().any():
         raise DataError(f"[{label}] missing values in required columns")
 
-    # Cross-validate initial cost & noise against the unified model baseline
+    # Cross-validate the initial states against the unified model baseline
+    max_noise_diff = 0.0
+    first = df.drop_duplicates(["Budget", "Expression #"])
     for b in BUDGETS:
         u_sub = unified_baseline[unified_baseline["Budget"] == b]
-        d_sub = df[df["Budget"] == b]
-        u_sorted = sorted(zip(u_sub["Initial Cost"].round(2), u_sub["Initial Noise"].round(2)))
-        d_sorted = sorted(zip(d_sub["Initial Cost"].round(2), d_sub["Initial Noise"].round(2)))
-        if u_sorted != d_sorted:
-            raise DataError(f"[{label}] initial states for budget {b} disagree with fheEnvUnified baseline")
+        d_sub = first[first["Budget"] == b]
+        if source == "legacy":
+            # one scalar cost per expression: (cost, noise) pairs must match
+            u_sorted = sorted(zip(u_sub["Initial Cost"].round(2), u_sub["Initial Noise"].round(2)))
+            d_sorted = sorted(zip(d_sub["Initial Cost"].round(2), d_sub["Initial Noise"].round(2)))
+            if u_sorted != d_sorted:
+                raise DataError(f"[{label}] initial states for budget {b} disagree with fheEnvUnified baseline")
+        u_noise = np.sort(u_sub["Initial Noise"].to_numpy(float))
+        d_noise = np.sort(d_sub["Initial Noise"].to_numpy(float))
+        diff = float(np.abs(u_noise - d_noise).max())
+        if diff > 0.011:
+            raise DataError(f"[{label}] initial noise for budget {b} disagrees with fheEnvUnified (max diff {diff:.3f} bits)")
+        max_noise_diff = max(max_noise_diff, diff)
 
     # Consistency checks: recalculate violation and cost reduction
     if (df["Agent Violated"] != (df["Agent Final Noise"] > df["Budget"])).any():
@@ -243,7 +291,10 @@ def load_agent(
         raise DataError(f"[{label}] `Agent Cost Reduction (%)` disagrees with raw cost formula (>0.011 pts)")
     if (df["Is Feasible"].astype(bool) != (df["Initial Noise"] <= df["Budget"])).any():
         raise DataError(f"[{label}] `Is Feasible` disagrees with Initial Noise <= Budget")
-    return df, path
+    problems = om.check_objectives(df, label, expressions if source == "unified" else None)
+    if problems:
+        raise DataError("; ".join(problems))
+    return df, path, max_noise_diff
 
 
 # --------------------------------------------------------------------------- #
@@ -255,11 +306,16 @@ def get_stats(df: pd.DataFrame, budget: int, within_only: bool = False) -> dict:
         sub = sub[sub["Initial Noise"] <= budget]
     n = len(sub)
     viol = int(sub["Agent Violated"].sum())
+    obj = om.objective_stats(sub, "Agent")
     return {
         "n": n,
+        "n_expr": int(sub["Expression #"].nunique()),
         "cr": float(sub["Agent Cost Reduction (%)"].mean()) if n else float("nan"),
         "viol": viol,
         "viol_rate": pct(viol, n),
+        "exec_red": obj["exec_red"],
+        "keys": obj["keys"],
+        "zero_keys_pct": obj["zero_keys_pct"],
     }
 
 
@@ -281,7 +337,7 @@ def compute_agent_comparison(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
 def compute_initial_budget_partition(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
     rows = []
     for b in BUDGETS:
-        base = frames[CON][frames[CON]["Budget"] == b]
+        base = frames[CON][frames[CON]["Budget"] == b].drop_duplicates("Expression #")
         total = len(base)
         n_in = int((base["Initial Noise"] <= b).sum())
         n_out = total - n_in
@@ -328,7 +384,7 @@ def compute_within_budget_quality(frames: dict[str, pd.DataFrame]) -> pd.DataFra
         rows.append(row)
     n_row = {"Agent": "(expressions in subset)"}
     for b in BUDGETS:
-        n_row[f"B={BUDGET_LABEL[b]} CR%"] = float(get_stats(frames[CON], b, within_only=True)["n"])
+        n_row[f"B={BUDGET_LABEL[b]} CR%"] = float(get_stats(frames[CON], b, within_only=True)["n_expr"])
     rows.append(n_row)
     return pd.DataFrame(rows)
 
@@ -357,6 +413,55 @@ def compute_ablation_violations(frames: dict[str, pd.DataFrame]) -> pd.DataFrame
     return pd.DataFrame(rows)
 
 
+# ---- MORL objectives: exec cost (C_exec) and rotation keys (C_keys) ---------- #
+def compute_objectives_table(frames: dict[str, pd.DataFrame], labels: list[tuple[str, str]],
+                             within_only: bool = False) -> pd.DataFrame:
+    """Per agent: exec-cost reduction and avg rotation keys for every budget, plus averages."""
+    rows = []
+    for label, shown in labels:
+        row = {"Agent": shown}
+        ex, ks = [], []
+        for b in BUDGETS:
+            s = get_stats(frames[label], b, within_only=within_only)
+            row[f"B={BUDGET_LABEL[b]} {EXEC_LABEL}"] = s["exec_red"]
+            row[f"B={BUDGET_LABEL[b]} avg keys"] = s["keys"]
+            ex.append(s["exec_red"])
+            ks.append(s["keys"])
+        row[f"Average {EXEC_LABEL}"] = float(np.mean(ex))
+        row["Average keys"] = float(np.mean(ks))
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def compute_objectives_long(frames: dict[str, pd.DataFrame], labels: list[tuple[str, str]],
+                            within_only: bool = False) -> pd.DataFrame:
+    """Long form of the objectives with the constraint metrics next to them."""
+    rows = []
+    for label, shown in labels:
+        for b in BUDGETS:
+            s = get_stats(frames[label], b, within_only=within_only)
+            rows.append({
+                "Agent": shown, "Budget": BUDGET_LABEL[b], "Rows (expr x pref)": s["n"],
+                "Expressions": s["n_expr"], "Average CR%": s["cr"],
+                EXEC_LABEL: s["exec_red"], f"Avg {KEYS_LABEL}": s["keys"],
+                "Zero-key rows (%)": s["zero_keys_pct"],
+                "Violation count": s["viol"], "Violation rate (%)": s["viol_rate"],
+            })
+    return pd.DataFrame(rows)
+
+
+def compact_objectives(t_obj: pd.DataFrame) -> pd.DataFrame:
+    """'exec% / keys' cells per budget, for the markdown report."""
+    rows = []
+    for _, r in t_obj.iterrows():
+        row = {"Agent": r["Agent"]}
+        for b in BUDGET_LBLS:
+            row[f"B={b}"] = f"{r[f'B={b} {EXEC_LABEL}']:.2f}% / {r[f'B={b} avg keys']:.2f}"
+        row["Average"] = f"{r[f'Average {EXEC_LABEL}']:.2f}% / {r['Average keys']:.2f}"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 # --------------------------------------------------------------------------- #
 # Plotting Functions
 # --------------------------------------------------------------------------- #
@@ -377,7 +482,7 @@ def plot_violation_rates(t_comp: pd.DataFrame, out_path: Path) -> Path:
     ax.set_title("Violation Rate by Budget (Raw Agent Output, No Rollback)", fontsize=13, pad=12)
     ax.set_xticks(x)
     ax.set_xticklabels(budgets)
-    ax.set_ylim(0, 50)
+    ax.set_ylim(0, max(50, float(np.nanmax(unc_vals + con_vals)) * 1.15))
     ax.legend(frameon=True)
     ax.grid(axis="y", linestyle="--", alpha=0.5)
 
@@ -448,7 +553,7 @@ def plot_ablation(t_abl: pd.DataFrame, out_path: Path) -> Path:
     ax.invert_yaxis()
     ax.set_xlabel("Average Cost Reduction (%) Across All Budgets", fontsize=11)
     ax.set_title("Constraint-Method Ablation (All 69 Expressions, Raw Output)", fontsize=13, pad=12)
-    ax.set_xlim(0, 75)
+    ax.set_xlim(0, max(75, float(np.nanmax(avg_crs)) * 1.15))
     ax.grid(axis="x", linestyle="--", alpha=0.5)
 
     for bar in bars:
@@ -467,25 +572,49 @@ def plot_ablation(t_abl: pd.DataFrame, out_path: Path) -> Path:
 # --------------------------------------------------------------------------- #
 # Report Builder
 # --------------------------------------------------------------------------- #
+OBJ_EXPLAIN = (
+    "Each cell is `exec cost reduction (%) / average rotation keys`. "
+    "Exec cost = `C_exec` (`exec_cost_mo`, the execution-time cost model: ops + rotations + depths), "
+    "reduction = `100 * (Initial Ops - Agent Final Ops) / Initial Ops` (higher is better). "
+    "Rotation keys = `C_keys`, the number of unique rotation (Galois) keys of the final program "
+    "(lower is better; every benchmark expression starts scalar with 0 keys, so the count is reported, not a reduction). "
+    "Both are cost-model values, not measured SEAL run times or key sizes. "
+    "Values are means over expressions x preferences.\n"
+)
+
+
 def build_report(ctx: dict) -> str:
+    unified = ctx["source"] == "unified"
     L = ["# Experiment 2: Constrained vs Unconstrained RL Agent — Reproduction Report\n"]
     L.append(
         "Generated by `run_experiment_2.py` integrating the unified model with noise constraint "
         "(`RL/fhe_rl/env_unified.py`, `fheEnvUnified`) and evaluating the benchmark results "
-        f"from `{ctx['results_rel']}`. All 69 VecLang expressions across budgets `230`, `236`, `369`, and `9M`.\n"
+        f"from `{ctx['results_rel']}` (source: **{ctx['source']}**). "
+        "All 69 VecLang expressions across budgets `230`, `236`, `369`, and `9M`"
+        + (f", each at {ctx['n_pref']} preferences `w = [w_ops, w_keys]`" if ctx["n_pref"] > 1 else "")
+        + ".\n"
     )
     L.append(
         "> [!IMPORTANT]\n"
-        "> **Safety Rollback is Disabled in Experiment 2**: All reported metrics (`Average CR%`, `Violation count`) "
-        "use the raw final episode-step agent output (`Agent *` columns). Safety rollback is evaluated separately in Experiment 3.\n"
+        "> **Safety Rollback is Disabled in Experiment 2**: All reported metrics (`Average CR%`, `Violation count`, "
+        "exec cost, rotation keys) use the raw final episode-step agent output (`Agent *` columns). "
+        "Safety rollback is evaluated separately in Experiment 3.\n"
     )
+    if ctx["n_pref"] > 1:
+        L.append(
+            "> [!NOTE]\n"
+            "> Expression counts (partition table) count expressions; violation counts and averages are over "
+            f"rows = expressions x {ctx['n_pref']} preferences.\n"
+        )
     L.append("## Unified Model & Noise Constraint Verification\n")
     L.append(
         f"- **Environment Class**: `fhe_rl.env_unified.fheEnvUnified`\n"
         f"- **Constraint Metric**: `noise` (`NoiseEstimator` fitting non-negative linear model predicting noise bits)\n"
         f"- **Benchmark Source**: `RL/fhe_rl/datasets/benchmarks.txt` ({N_EXPR} VecLang expressions)\n"
-        f"- **Verification**: Ground-truth initial cost and initial noise computed via `fheEnvUnified.reset` "
-        "match the recorded benchmark states bit-for-bit (max cost diff = 0.0, max noise diff <= 0.005 bits).\n"
+        f"- **Verification**: Initial noise computed via `fheEnvUnified.reset` matches the recorded benchmark states "
+        f"(max noise diff = {ctx['max_noise_diff']:.3f} bits)"
+        + ("; initial costs match exactly.\n" if not unified else
+           "; `Initial Ops` / `Initial Keys` match `split_cost_mo` on the benchmark expressions.\n")
     )
     L.append("## Constrained vs Unconstrained Comparison\n")
     L.append(
@@ -493,6 +622,20 @@ def build_report(ctx: dict) -> str:
     )
     L.append(df_to_md(ctx["t_comp"]) + "\n")
     L.append("![Violation Rates](violation_rates.png)\n")
+
+    if ctx["has_obj"]:
+        L.append("### Execution Cost and Rotation Keys (all 69 expressions)\n")
+        L.append(OBJ_EXPLAIN)
+        L.append(df_to_md(compact_objectives(ctx["t_obj_comp"])) + "\n")
+        L.append("![Objectives](objectives_constrained_vs_unconstrained.png)\n")
+    else:
+        L.append(
+            "> [!NOTE]\n"
+            "> Execution cost and rotation keys are not reported: these legacy results store one scalar cost per step. "
+            "Run `scripts/ablation_unified/eval_*.sbatch` (it logs `Agent/Safe Final Ops` and `Keys`) and rerun with "
+            "`--source unified`.\n"
+        )
+
     L.append("## Initial Budget Status & Violations Attribution\n")
     L.append(
         "Partition expressions according to initial estimated noise: "
@@ -501,11 +644,17 @@ def build_report(ctx: dict) -> str:
     L.append(df_to_md(ctx["t_part"]) + "\n")
     L.append("### Where Do Full-Benchmark Violations Originate?\n")
     L.append(df_to_md(ctx["t_part_ctx"]) + "\n")
+    k = ctx["t_part_ctx"]
+    c230 = k[(k["Agent"] == CON_LABEL) & (k["Budget"] == "230")].iloc[0]
+    tot_all = int(k["All violations"].sum())
+    tot_above = int(k["of which initially above budget"].sum())
     L.append(
         "> [!NOTE]\n"
-        "> **Key Insight**: The majority of violations on the full benchmark originate from expressions that were "
-        "**already above budget prior to optimization** (e.g. at B=230, all 26 violations of the constrained agent "
-        "are expressions whose initial noise exceeded 230 bits; 0 new violations were introduced on initially valid expressions).\n"
+        f"> **Key Insight**: {pct(tot_above, tot_all):.1f}% of all violations ({tot_above}/{tot_all}) on the full "
+        "benchmark come from expressions that were **already above budget prior to optimization** "
+        f"(e.g. at B=230, {int(c230['of which initially above budget'])} of the constrained agent's "
+        f"{int(c230['All violations'])} violations start above 230 bits; "
+        f"{int(c230['of which initially within budget'])} new violations on initially valid expressions).\n"
     )
     L.append("## Cost Reduction on Initially Within-Budget Expressions\n")
     L.append(
@@ -514,6 +663,12 @@ def build_report(ctx: dict) -> str:
     )
     L.append(df_to_md(ctx["t_wb"]) + "\n")
     L.append("![Within-Budget Cost Reduction](within_budget_cost_reduction.png)\n")
+    if ctx["has_obj"]:
+        L.append("### Execution Cost and Rotation Keys on Initially Within-Budget Expressions\n")
+        L.append(OBJ_EXPLAIN)
+        L.append(df_to_md(compact_objectives(ctx["t_obj_wb"])) + "\n")
+        L.append("![Within-Budget Objectives](objectives_within_budget.png)\n")
+
     L.append("## Constraint-Method Ablation\n")
     L.append(
         "Comparison of all 6 constraint formulations on the full 69-expression benchmark without rollback.\n"
@@ -522,15 +677,44 @@ def build_report(ctx: dict) -> str:
     L.append("![Ablation Comparison](ablation_cost_reduction.png)\n")
     L.append("### Supplementary Raw Violation Counts Across Ablated Methods\n")
     L.append(df_to_md(ctx["t_abl_v"]) + "\n")
+    if ctx["has_obj"]:
+        L.append("### Execution Cost and Rotation Keys Across Ablated Methods\n")
+        L.append(OBJ_EXPLAIN)
+        L.append(df_to_md(compact_objectives(ctx["t_obj_abl"])) + "\n")
+        L.append("![Ablation Objectives](ablation_objectives.png)\n")
+    if ctx["has_pref"]:
+        L.append("## Preference Trade-off (Exec Cost vs Rotation Keys)\n")
+        L.append(
+            "Per preference `w = [w_ops, w_keys]`, averaged over the 4 budgets, all 69 expressions, no rollback. "
+            "Raising `w_keys` should trade exec cost reduction for fewer rotation keys; "
+            "the per-budget values are in `preference_tradeoff/per_budget.csv`.\n"
+        )
+        L.append(df_to_md(ctx["t_pref_sum"]) + "\n")
+        L.append("![Preference Trade-off](preference_tradeoff.png)\n")
+
     L.append("## Method & Configuration Mapping\n")
     L.append(df_to_md(ctx["cfg"]) + "\n")
     L.append("## Verification Against Manuscript\n")
-    L.append(
-        "- **Average CR% for V5 Lag-PID + NATO-SC**: Computed average is **60.87%**, matching the manuscript's reported 60.87%.\n"
-        "- **Per-Budget CR%**: B=230 (60.49%), B=236 (62.07%), B=369 (55.87%), B=9M (65.03%).\n"
-        "- **Initially Within-Budget Subset Counts**: B=230 (43), B=236 (43), B=369 (59), B=9M (69).\n"
-        "- **Within-Budget Violations**: At B=230, constrained agent introduces 0 violations (0.0%).\n"
-    )
+    if unified:
+        L.append(
+            "- Not applicable: these are the unified-agent ablation results, the manuscript values come from the "
+            "earlier constrained (PFE) agents.\n"
+        )
+    else:
+        con = ctx["t_abl"][ctx["t_abl"]["Agent / method"] == CON].iloc[0]
+        wb = ctx["t_wb"][ctx["t_wb"]["Agent"] == "(expressions in subset)"].iloc[0]
+        part = ctx["t_part"]
+        match = "matching" if abs(con["Average CR%"] - MANUSCRIPT_LAGPID_AVG_CR) < 0.005 else "**not matching**"
+        L.append(
+            f"- **Average CR% for V5 Lag-PID + NATO-SC**: Computed average is **{con['Average CR%']:.2f}%**, "
+            f"{match} the manuscript's reported {MANUSCRIPT_LAGPID_AVG_CR:.2f}%.\n"
+            "- **Per-Budget CR%**: " + ", ".join(f"B={b} ({con[f'B={b} CR%']:.2f}%)" for b in BUDGET_LBLS) + ".\n"
+            "- **Initially Within-Budget Subset Counts**: "
+            + ", ".join(f"B={b} ({int(wb[f'B={b} CR%'])})" for b in BUDGET_LBLS) + ".\n"
+            f"- **Within-Budget Violations**: At B=230, constrained agent introduces "
+            f"{int(part.iloc[0]['Within-budget violations, constrained: count'])} violations "
+            f"({part.iloc[0]['Within-budget violations, constrained: %']:.1f}%).\n"
+        )
     return "\n".join(L)
 
 
@@ -539,9 +723,14 @@ def build_report(ctx: dict) -> str:
 # --------------------------------------------------------------------------- #
 def run(args) -> int:
     results_dir = Path(args.results_dir).resolve()
+    unified_dir = Path(args.unified_dir).resolve()
     benchmark_file = Path(args.benchmark).resolve()
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
+
+    source = om.resolve_source(args.source, results_dir, unified_dir)
+    data_dir = unified_dir if source == "unified" else results_dir
+    print(f"[init] Result source: {source} ({data_dir})")
 
     print(f"[init] Loading benchmark expressions from source: {benchmark_file}...")
     expressions = load_benchmark_expressions(benchmark_file)
@@ -554,10 +743,16 @@ def run(args) -> int:
     unified_baseline = evaluate_initial_expressions_with_unified_model(env, expressions)
     print(f"       Computed {len(unified_baseline)} states (69 expressions x 4 budgets)")
 
-    frames, paths = {}, {}
-    for label, (tag, _) in AGENTS.items():
-        frames[label], paths[label] = load_agent(results_dir, label, tag, unified_baseline)
+    frames, paths, noise_diffs = {}, {}, []
+    for label in AGENTS:
+        frames[label], paths[label], d = load_agent(
+            source, results_dir, unified_dir, label, unified_baseline, expressions)
+        noise_diffs.append(d)
         print(f"[data] {label}: loaded {paths[label].name} ({len(frames[label])} rows)")
+
+    has_obj = all(om.has_objectives(f) for f in frames.values())
+    has_pref = has_obj and all(om.has_preferences(f) for f in frames.values())
+    n_pref = frames[CON].groupby(om.PREF_COLS).ngroups if has_pref else 1
 
     t_comp = compute_agent_comparison(frames)
     t_part = compute_initial_budget_partition(frames)
@@ -565,18 +760,40 @@ def run(args) -> int:
     t_wb = compute_within_budget_quality(frames)
     t_abl = compute_constraint_ablation(frames)
     t_abl_v = compute_ablation_violations(frames)
-    cfg = pd.DataFrame([{"Label": k, "Result tag": v[0], "Configuration": v[1]} for k, v in AGENTS.items()])
+    cfg = pd.DataFrame([{"Label": k, "Result tag": om.AGENT_SOURCES[k][0 if source == "legacy" else 1],
+                         "Configuration": AGENT_CONFIG[source][k]} for k in AGENTS])
+
+    pair = [(UNC, UNC), (CON, CON_LABEL)]
+    all_agents = [(a, a) for a in AGENTS]
+    t_obj_comp = t_obj_wb = t_obj_abl = t_pref = t_pref_sum = None
+    if has_obj:
+        t_obj_comp = compute_objectives_table(frames, pair)
+        t_obj_wb = compute_objectives_table(frames, pair, within_only=True)
+        t_obj_abl = compute_objectives_table(frames, all_agents)
+    if has_pref:
+        t_pref = om.preference_table(frames, [UNC, CON], BUDGETS, BUDGET_LABEL, "Agent")
+        t_pref["Agent"] = t_pref["Agent"].replace({CON: CON_LABEL})
+        t_pref_sum = om.preference_summary(t_pref)
 
     # Write summary CSVs (clean experiment names, no 2A/2B/etc.)
     written = []
-    for name, t in (
+    summaries = [
         ("constrained_vs_unconstrained", t_comp),
         ("initial_status_and_violations", t_part),
         ("violations_by_initial_status", t_part_ctx),
         ("cr_within_budget", t_wb),
         ("ablation_cr", t_abl),
         ("ablation_violations", t_abl_v),
-    ):
+    ]
+    if has_obj:
+        summaries += [
+            ("objectives_constrained_vs_unconstrained", t_obj_comp),
+            ("objectives_within_budget", t_obj_wb),
+            ("ablation_objectives", t_obj_abl),
+        ]
+    if has_pref:
+        summaries.append(("preference_tradeoff", t_pref_sum))
+    for name, t in summaries:
         p = out / f"{name}.csv"
         t.to_csv(p, index=False, float_format="%.4f")
         written.append(p.name)
@@ -615,6 +832,16 @@ def run(args) -> int:
             ], ignore_index=True),
         },
     }
+    if has_obj:
+        subfolders["agent_comparison"]["aggregate_objectives.csv"] = compute_objectives_long(frames, pair)
+        subfolders["within_budget_quality"]["aggregate_objectives.csv"] = compute_objectives_long(frames, pair, within_only=True)
+        subfolders["constraint_ablation"]["aggregate_objectives.csv"] = compute_objectives_long(frames, all_agents)
+    if has_pref:
+        subfolders["preference_tradeoff"] = {
+            "per_budget.csv": t_pref,
+            "summary.csv": t_pref_sum,
+            "per_budget_all_agents.csv": om.preference_table(frames, AGENTS, BUDGETS, BUDGET_LABEL, "Agent"),
+        }
 
     for folder_name, files_dict in subfolders.items():
         folder_path = out / folder_name
@@ -629,20 +856,44 @@ def run(args) -> int:
     p_wb = plot_within_budget_cr(t_wb, out / "within_budget_cost_reduction.png")
     p_abl = plot_ablation(t_abl, out / "ablation_cost_reduction.png")
     written.extend([p_viol.name, p_wb.name, p_abl.name])
+    if has_obj:
+        exec_fmt = "B={b} " + EXEC_LABEL
+        keys_fmt = "B={b} avg keys"
+        for t, name, title in (
+            (t_obj_comp, "objectives_constrained_vs_unconstrained.png", "Exec Cost and Rotation Keys (All 69 Expressions, No Rollback)"),
+            (t_obj_wb, "objectives_within_budget.png", "Exec Cost and Rotation Keys on Initially Within-Budget Expressions"),
+            (t_obj_abl, "ablation_objectives.png", "Constraint-Method Ablation: Exec Cost and Rotation Keys (No Rollback)"),
+        ):
+            om.plot_objectives_by_budget(t, BUDGET_LBLS, "Agent", exec_fmt, keys_fmt, title, out / name,
+                                         highlight=CON if name == "ablation_objectives.png" else CON_LABEL)
+            written.append(name)
+    if has_pref:
+        om.plot_preference_tradeoff(t_pref, "Exec Cost vs Rotation Keys per Preference (No Rollback)",
+                                    out / "preference_tradeoff.png")
+        written.append("preference_tradeoff.png")
 
     try:
-        results_rel = results_dir.relative_to(REPO_ROOT).as_posix()
+        results_rel = data_dir.relative_to(REPO_ROOT).as_posix()
     except ValueError:
-        results_rel = str(results_dir)
+        results_rel = str(data_dir)
 
     report = build_report({
+        "source": source,
         "results_rel": results_rel,
+        "n_pref": n_pref,
+        "max_noise_diff": max(noise_diffs),
+        "has_obj": has_obj,
+        "has_pref": has_pref,
         "t_comp": t_comp,
         "t_part": t_part,
         "t_part_ctx": t_part_ctx,
         "t_wb": t_wb,
         "t_abl": t_abl,
         "t_abl_v": t_abl_v,
+        "t_obj_comp": t_obj_comp,
+        "t_obj_wb": t_obj_wb,
+        "t_obj_abl": t_obj_abl,
+        "t_pref_sum": t_pref_sum,
         "cfg": cfg,
     })
     write_text(out / "exp2_results.md", report)
@@ -652,7 +903,12 @@ def run(args) -> int:
         "experiment": "experiment_2 (constrained vs unconstrained RL agent)",
         "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "rollback": "disabled (raw Agent * columns at terminal step)",
+        "result_source": source,
         "budgets": BUDGETS,
+        "preferences_per_expression": n_pref,
+        "objectives": ({"exec_cost": "Agent Final Ops (C_exec, exec_cost_mo); reported as reduction vs Initial Ops",
+                        "rotation_keys": "Agent Final Keys (C_keys, unique rotation keys); reported as mean count"}
+                       if has_obj else "not available in these results"),
         "unified_model": {
             "source_path": "RL/fhe_rl/env_unified.py",
             "env_class": "fhe_rl.env_unified.fheEnvUnified",
@@ -662,7 +918,8 @@ def run(args) -> int:
             "benchmark_expressions_count": N_EXPR,
         },
         "workbooks": {
-            l: {"file": paths[l].name, "sha256": sha256_file(paths[l]), "rows": len(frames[l])}
+            l: {"file": str(paths[l].relative_to(data_dir).as_posix()) if paths[l].is_relative_to(data_dir) else paths[l].name,
+                "sha256": sha256_file(paths[l]), "rows": len(frames[l])}
             for l in AGENTS
         },
         "environment": {
@@ -680,6 +937,9 @@ def run(args) -> int:
     print("CONSTRAINED VS UNCONSTRAINED COMPARISON")
     print("="*80)
     print(df_to_md(t_comp))
+    if has_obj:
+        print("\nExec cost reduction (%) / avg rotation keys:")
+        print(df_to_md(compact_objectives(t_obj_comp)))
 
     print("\n" + "="*80)
     print("INITIAL BUDGET PARTITION & VIOLATION ATTRIBUTION")
@@ -690,11 +950,25 @@ def run(args) -> int:
     print("COST REDUCTION ON INITIALLY WITHIN-BUDGET EXPRESSIONS")
     print("="*80)
     print(df_to_md(t_wb))
+    if has_obj:
+        print("\nExec cost reduction (%) / avg rotation keys:")
+        print(df_to_md(compact_objectives(t_obj_wb)))
 
     print("\n" + "="*80)
     print("CONSTRAINT-METHOD ABLATION")
     print("="*80)
     print(df_to_md(t_abl))
+    if has_obj:
+        print("\nExec cost reduction (%) / avg rotation keys:")
+        print(df_to_md(compact_objectives(t_obj_abl)))
+    else:
+        print("\n[note] exec cost / rotation keys not in these results (legacy source); "
+              "use --source unified with results/ablation_unified/")
+    if has_pref:
+        print("\n" + "="*80)
+        print("PREFERENCE TRADE-OFF (averaged over budgets)")
+        print("="*80)
+        print(df_to_md(t_pref_sum))
 
     print(f"\n[done] All outputs successfully generated in {out}")
     return 0
@@ -706,7 +980,10 @@ def main(argv=None) -> int:
     except Exception:
         pass
     ap = argparse.ArgumentParser(description="Experiment 2: Constrained vs Unconstrained RL Agent")
-    ap.add_argument("--results-dir", default=str(DEFAULT_RESULTS), help="directory with original_<tag>.xlsx workbooks")
+    ap.add_argument("--source", choices=["auto", "unified", "legacy"], default="auto",
+                    help="unified = results/ablation_unified (exec cost + rotation keys), legacy = hpc_results workbooks")
+    ap.add_argument("--results-dir", default=str(DEFAULT_RESULTS), help="legacy: directory with original_<tag>.xlsx workbooks")
+    ap.add_argument("--unified-dir", default=str(DEFAULT_UNIFIED), help="unified: results/ablation_unified (<agent>/eval_<job>/original.csv)")
     ap.add_argument("--benchmark", default=str(DEFAULT_BENCHMARK), help="path to benchmarks.txt")
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="output directory")
     args = ap.parse_args(argv)
