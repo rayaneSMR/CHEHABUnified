@@ -3,14 +3,16 @@
 # Submit the whole evaluation of the 4-preference ablation agents (run on the login node, repo root),
 # once the 6 models are trained (train_<agent>_4pref.sbatch, incl. train_v5_lagpid_4pref.sbatch):
 #
-#   bash scripts/ablation_unified/launch_4pref_eval.sh            # estimate-based eval + SEAL sweeps
+#   bash scripts/ablation_unified/launch_4pref_eval.sh            # estimate-based eval + real SEAL execution
 #   bash scripts/ablation_unified/launch_4pref_eval.sh --no-seal  # estimate-based eval only
 #
 # 1. eval_4pref.sbatch <agent> for the 6 agents (test --v2 at the 4 preferences, original + threshold)
 #      -> results/ablation_unified/<agent>_4pref/eval_<jobid>/{original,threshold}.csv
-# 2. build/ (build_chehab_benchmarks.sbatch) if it is not built yet
-# 3. seal_sweep_4pref.sbatch twice (8 shards each): with and without rollback
-#      -> results/ablation_unified/seal_4pref/{rollback,no_rollback}/raw/*.csv
+# 2. real compile + SEAL execution, the protocol of the unified agent (run_benchmarks_unified.py):
+#    e2e_4pref.sh all 1 (with rollback, Experiment 3) and e2e_4pref.sh all 0 (raw output, Experiment 2)
+#      -> results/ablation_unified/e2e_4pref/{rollback,no_rollback}/<agent>_4pref/e2e_*.csv
+#    Needs build/ with the benchmarks (sbatch scripts/build_chehab_benchmarks.sbatch) and SEAL 4.1
+#    (sbatch scripts/build_bfv_noise_cli.sbatch) before it is run.
 # Then, on your machine (after copying results/ablation_unified/):
 #   python experiments_reproduction/experiment_2/run_experiment_2.py
 #   python experiments_reproduction/experiment_3/run_experiment_3.py
@@ -38,18 +40,7 @@ for a in $AGENTS; do
 done
 
 if [ "${1:-}" != "--no-seal" ]; then
-    DEP=""
-    if [ -x build/benchmarks/dot_product/dot_product ] && [ "${REBUILD:-0}" != "1" ]; then
-        echo "build/: already built (REBUILD=1 to force)"
-    else
-        BUILD_ID=$(sbatch --parsable scripts/build_chehab_benchmarks.sbatch)
-        echo "build: job $BUILD_ID"
-        DEP="--dependency=afterok:$BUILD_ID"
-    fi
-    for rb in 1 0; do
-        id=$(sbatch --parsable $DEP --export=ALL,ROLLBACK=$rb -J "abl4-seal-rb$rb" scripts/ablation_unified/seal_sweep_4pref.sbatch)
-        echo "SEAL sweep ROLLBACK=$rb: job $id (8 shards)"
-    done
-    echo "      -> results/ablation_unified/seal_4pref/{rollback,no_rollback}/raw/"
+    bash scripts/ablation_unified/e2e_4pref.sh all 1
+    bash scripts/ablation_unified/e2e_4pref.sh all 0
 fi
 echo "Monitor: squeue -u ${USER:-$(whoami)}"

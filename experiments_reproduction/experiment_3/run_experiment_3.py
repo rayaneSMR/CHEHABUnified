@@ -44,10 +44,11 @@ Methodology:
     9. Emits structured CSV files, high-resolution plots, markdown report
        (exp3_results.md), and execution metadata (run_metadata.json).
 
-   10. Measured on SEAL/BFV with rollback: circuit execution time (ms), rotation-key size (MB)
-       and measured violation rate per agent and budget on initially within-budget points, from
-       the real-execution sweep (scripts/ablation_unified/seal_sweep_4pref.sbatch, ROLLBACK=1)
-       on the 47 C++ benchmark instances, plus the per-preference breakdown.
+   10. Measured on SEAL/BFV with rollback: circuit execution time (ms), rotation-key size (MB),
+       measured violation rate and output correctness per agent and budget on initially within-budget
+       points, measured exactly like the unified agent of train_unified_noise.sbatch
+       (run_benchmarks_unified.py: compile each C++ benchmark, build the SEAL program, 3 runs,
+       first = warm-up, median), via scripts/ablation_unified/e2e_4pref.sh <agent> 1.
 
 Result sources:
     --source unified (default)  results/ablation_unified/<agent>_4pref/eval_<jobid>/{original,threshold}.csv
@@ -55,7 +56,7 @@ Result sources:
              results/ablation_unified/<agent>/eval_<jobid>/... (--ablation 10pref; 10 preferences).
     --source legacy  hpc_results/rl_test_results/{original,threshold}_<tag>.xlsx (no exec/keys).
     --source auto    unified when results exist for all 6 agents, else legacy.
-    --seal-dir       results/ablation_unified/seal_4pref (reads its rollback/raw/ CSVs);
+    --e2e-dir        results/ablation_unified/e2e_4pref (reads rollback/<agent>_4pref/e2e_*.csv);
              the measured section is skipped when it has no results.
 
 Exit codes: 0 ok | 1 unexpected error | 2 data/validation error
@@ -127,7 +128,7 @@ from objective_metrics import EXEC_LABEL, KEYS_LABEL
 
 DEFAULT_RESULTS = REPO_ROOT / "hpc_results" / "rl_test_results"
 DEFAULT_UNIFIED = REPO_ROOT / "results" / "ablation_unified"
-DEFAULT_SEAL = DEFAULT_UNIFIED / "seal_4pref"
+DEFAULT_SEAL = DEFAULT_UNIFIED / "e2e_4pref"
 SEAL_MODE = "rollback"   # Experiment 3 = with safety rollback
 DEFAULT_ORIG_BENCHMARK = RL_DIR / "fhe_rl" / "datasets" / "benchmarks.txt"
 DEFAULT_THRESH_DATASET = RL_DIR / "fhe_rl" / "datasets" / "threshold_benchmarks.txt"
@@ -559,8 +560,8 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_RESULTS, help="legacy: path to HPC result workbooks")
     parser.add_argument("--unified-dir", type=Path, default=DEFAULT_UNIFIED,
                         help="unified: results/ablation_unified (<agent>[_4pref]/eval_<job>/{original,threshold}.csv)")
-    parser.add_argument("--seal-dir", type=Path, default=DEFAULT_SEAL,
-                        help=f"measured SEAL sweep (reads <seal-dir>/{SEAL_MODE}/raw/abl4_<agent>*.csv)")
+    parser.add_argument("--e2e-dir", "--seal-dir", dest="seal_dir", type=Path, default=DEFAULT_SEAL,
+                        help=f"real compile + SEAL results (reads <e2e-dir>/{SEAL_MODE}/<agent>_4pref/e2e_*.csv)")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT, help="Output root directory")
     parser.add_argument("--seed", type=int, default=7777, help="Random seed for benchmark generator")
     args = parser.parse_args()
@@ -1006,7 +1007,7 @@ def run(args) -> int:
     plt.close(fig)
 
     # ----------------------------------------------------------------------- #
-    # Part 6b: Measured on SEAL with rollback (47 C++ benchmark instances)
+    # Part 6b: Measured on SEAL with rollback (real compile + SEAL run of the C++ benchmarks)
     # ----------------------------------------------------------------------- #
     agent_order = list(ABLATION_AGENTS)
     seal_frames = {k: om.load_seal(args.seal_dir / SEAL_MODE, k) for k in agent_order}
@@ -1040,7 +1041,7 @@ def run(args) -> int:
               f"{om.seal_compact(seal_df, [BUDGET_LABEL[b] for b in ALL_BUDGETS], UNCONSTRAINED_NAME).to_string(index=False)}")
         print()
     else:
-        print(f"No SEAL results in {args.seal_dir / SEAL_MODE / 'raw'} (measured section skipped)")
+        print(f"No SEAL results in {args.seal_dir / SEAL_MODE} (measured section skipped)")
 
     # ----------------------------------------------------------------------- #
     # Part 7: Write Markdown Summary Report & Metadata
@@ -1111,15 +1112,15 @@ def run(args) -> int:
         rf.write("\n## 6. Measured on SEAL: Execution Time and Rotation-Key Size (With Rollback)\n\n")
         if seal_df is not None:
             rf.write(
-                "Real execution of the compiled programs on SEAL/BFV with the safety rollback on "
-                "(`CHEHAB_RL_ROLLBACK=1`): every agent compiles the 47 non-DNN C++ benchmark instances "
-                f"(`unified_morl_experiments.py sweep --experiments ABL4`, results in `{args.seal_dir / SEAL_MODE}`) "
-                "for every budget and its 4 training preferences; initially within-budget points only "
-                "(estimated initial noise <= B). Each cell is `mean circuit execution time / mean rotation-key size "
-                "(Galois keys, `save_size`) / measured violation rate`; a measured violation is "
-                "`369 - remaining noise budget > B` or a remaining budget <= 0, so it checks the rollback against "
-                "the real noise. `Time vs Unconstrained` is the geometric mean, over the points both agents "
-                "executed, of the time ratio (< 1 = faster). Different benchmark set from the 69 VecLang "
+                "Real execution on SEAL/BFV with the safety rollback on (`FHE_RL_ROLLBACK=1`), the same protocol "
+                "as the evaluation of the unified agent: "
+                + "the C++ benchmarks of the unified agent's real-execution evaluation (13 benchmarks, 46 configurations: `scripts/ablation_unified/e2e_4pref.sh` -> `eval_unified_e2e.sbatch` -> `run_benchmarks_unified.py`, results in `{src}`) are compiled by CHEHAB with each agent at every budget and its 4 training preferences; the generated SEAL program is built (Release) and run 3 times, the first run is a warm-up and the median of the others is kept, and the decrypted outputs are checked".format(src=args.seal_dir / SEAL_MODE)
+                + ". Initially within-budget points only (estimated initial noise <= B). Each cell is "
+                "`mean circuit execution time / mean rotation-key size (GaloisKeys::save_size) / measured violation "
+                "rate`; a measured violation is a remaining noise budget <= 0 or `369 - remaining > B`, so it checks "
+                "the rollback against the real noise. `Time vs Unconstrained` is the geometric mean, over the points "
+                "both agents executed, of the time ratio (< 1 = faster); `Outputs correct` = decrypted results equal "
+                "to the expected ones. These are the C++ benchmarks, a different set from the 69 VecLang "
                 "expressions of section 5.\n\n")
             rf.write(df_to_markdown(om.seal_compact(seal_df, [BUDGET_LABEL[b] for b in ALL_BUDGETS],
                                                     UNCONSTRAINED_NAME)))
@@ -1130,9 +1131,9 @@ def run(args) -> int:
                 rf.write("\n")
         else:
             rf.write("> [!NOTE]\n"
-                     f"> No SEAL results in `{args.seal_dir / SEAL_MODE}/raw/`. Run "
-                     "`sbatch --export=ALL,ROLLBACK=1 scripts/ablation_unified/seal_sweep_4pref.sbatch` "
-                     "(or `bash scripts/ablation_unified/launch_4pref_eval.sh`) and rerun.\n")
+                     f"> No SEAL results in `{args.seal_dir / SEAL_MODE}/<agent>_4pref/`. Run "
+                     "`bash scripts/ablation_unified/e2e_4pref.sh all 1` on the cluster, copy "
+                     "`results/ablation_unified/e2e_4pref/` here and rerun.\n")
 
     metadata = {
         "experiment": "Experiment 3 - Safety Rollback & Synthetic Near-Threshold Benchmark",
@@ -1147,7 +1148,7 @@ def run(args) -> int:
         "preferences_per_expression": n_pref,
         "seal_measured": ({"dir": str(args.seal_dir / SEAL_MODE), "agents": {k: len(v) for k, v in seal_frames.items()},
                            "subset": "initially within budget (initial_est_noise <= B)",
-                           "time": "circuit_execution_time_s (reported in ms)", "key_size": "rotation_keys_size_mb"}
+                           "time": "circuit_execution_time (s), reported in ms", "key_size": "rotation_keys_size (MB)", "protocol": "run_benchmarks_unified.py: Release build, 3 runs, first = warm-up, median"}
                           if seal_frames else "no results"),
         "objectives": ({"exec_cost": "Safe Final Ops (C_exec, exec_cost_mo); reported as reduction vs Initial Ops",
                         "rotation_keys": "Safe Final Keys (C_keys, unique rotation keys); reported as mean count"}

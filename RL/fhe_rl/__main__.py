@@ -735,6 +735,7 @@ def main(args=None):
                     constraint_metric=os.environ.get("FHE_RL_CONSTRAINT", "noise"),
                     constraint_method=os.environ.get("FHE_RL_METHOD", "nato_sc"),
                     log_file=os.environ.get("FHE_RL_RUN_LOG"),
+                    rollback=os.environ.get("FHE_RL_ROLLBACK", "1") not in ("0", "false", "False"),
                 )
             else:
                 from .run_unified import run_agent_unified

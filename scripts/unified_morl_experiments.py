@@ -130,31 +130,6 @@ AGENTS["uniform"].model = str(MODELS_DIR / "unified_noise_uniform_pref.zip")
 if os.environ.get("UNIFIED_UNIFORM_MODEL"):
     AGENTS["uniform"].model = os.environ["UNIFIED_UNIFORM_MODEL"]
 
-# ── 4-preference constraint ablation (scripts/ablation_unified/train_*_4pref.sbatch) ──
-# Agents trained on w = [1.0,0.0] [0.9,0.1] [0.8,0.2] [0.6,0.4]; model
-# trained_models/unified_noise_abl_<agent>_4pref[_best].zip (best eval checkpoint preferred,
-# same choice as the eval scripts). Real-execution sweep: scripts/ablation_unified/seal_sweep_4pref.sbatch
-PREFS_4PREF = [1.0, 0.9, 0.8, 0.6]
-ABL4_METHODS = {
-    "unconstrained": ("none", "no constraint handling (ppo, film)"),
-    "v4_mb": ("margin_barrier", "V4 margin barrier (ppo, raw)"),
-    "v4_nmask": ("noise_masking", "V4 noise masking (ppo, embed)"),
-    "v4_mb_film": ("margin_barrier", "V4 margin barrier + FiLM (ppo, film)"),
-    "v5_focops": ("nato_sc", "V5 FOCOPS + NATO-SC (film)"),
-    "v5_lagpid": ("nato_sc", "V5 Lag-PID + NATO-SC (film), constrained reference"),
-}
-
-
-def _abl4_model(agent):
-    final = MODELS_DIR / f"unified_noise_abl_{agent}_4pref.zip"
-    best = MODELS_DIR / f"unified_noise_abl_{agent}_4pref_best.zip"
-    return str(best if best.is_file() else final)
-
-
-for _a, (_method, _note) in ABL4_METHODS.items():
-    AGENTS[f"abl4_{_a}"] = Agent(f"abl4_{_a}", "unified", model=_abl4_model(_a), method=_method,
-                                 note=f"4-pref ablation: {_note}")
-
 # experiment -> list of (agent, preferences, bisection?)
 EXPERIMENTS = {
     "B1":  [("base", [1.0], False), ("morl", [1.0], False), ("original", [1.0], False)],
@@ -164,11 +139,7 @@ EXPERIMENTS = {
     "A3":  [("base", PREFS, False), ("uniform", PREFS, False), ("cycle2", PREFS, False)],
     # Experiment 3: uniform-preference agent alone, 10 preferences x 4 budgets, grid + bisection
     "E3":  [("uniform", PREFS, True)],
-    # 4-preference constraint ablation: 6 agents x their 4 training preferences, no bisection.
-    # Opt-in only (not part of "all"); run once with CHEHAB_RL_ROLLBACK=1 and once with 0.
-    "ABL4": [(f"abl4_{a}", PREFS_4PREF, False) for a in ABL4_METHODS],
 }
-OPT_IN_EXPERIMENTS = {"ABL4"}
 
 CSV_FIELDS = [
     "agent", "benchmark", "family", "size", "budget", "w_ops", "w_keys", "source",
@@ -518,8 +489,7 @@ def cmd_sweep(args):
 
 def plan_jobs(args):
     """Merge the selected experiments into {agent: (prefs, bisect)} so shared runs happen once."""
-    names = ([e for e in EXPERIMENTS if e not in OPT_IN_EXPERIMENTS] if args.experiments == "all"
-             else args.experiments.split(","))
+    names = list(EXPERIMENTS) if args.experiments == "all" else args.experiments.split(",")
     merged = {}
     for exp in names:
         for agent, prefs, bisect in EXPERIMENTS[exp]:

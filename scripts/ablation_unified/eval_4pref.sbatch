@@ -15,7 +15,7 @@
 #   original   = RL/fhe_rl/datasets/benchmarks.txt minus DNN (69 expressions)
 #   threshold  = RL/fhe_rl/datasets/threshold_benchmarks.txt  (60, initial noise at 80-100% of a budget)
 # Budgets 230,236,369,9000000 x the 4 preferences. Rollback validity uses the BFV certificate.
-# Measured SEAL execution time / rotation-key size: scripts/ablation_unified/seal_sweep_4pref.sbatch
+# Measured SEAL execution time / rotation-key size: scripts/ablation_unified/e2e_4pref.sh (real compile + SEAL run)
 #
 # Output (own folder per agent and per job, nothing overwritten):
 #   results/ablation_unified/<agent>_4pref/eval_<jobid>/

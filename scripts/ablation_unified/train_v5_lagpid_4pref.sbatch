@@ -21,7 +21,7 @@
 #   final model   RL/fhe_rl/trained_models/unified_noise_abl_v5_lagpid_4pref.zip  (+ _best.zip)
 #
 # Submit from the repo root:  sbatch scripts/ablation_unified/train_v5_lagpid_4pref.sbatch
-# Evaluation: sbatch scripts/ablation_unified/eval_4pref.sbatch v5_lagpid   (+ seal_sweep_4pref.sbatch)
+# Evaluation: sbatch scripts/ablation_unified/eval_4pref.sbatch v5_lagpid   (+ bash scripts/ablation_unified/e2e_4pref.sh v5_lagpid 1 / 0)
 # ════════════════════════════════════════════════════════════════════════════
 
 #SBATCH -p compute

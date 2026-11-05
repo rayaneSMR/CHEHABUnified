@@ -15,10 +15,10 @@ Result layouts:
     unified  results/ablation_unified/<agent>[_4pref]/eval_<jobid>/{original,threshold}.csv
              (scripts/ablation_unified/eval_*.sbatch: exec/keys split; 10 preferences, or the
              4 training preferences for the 4-preference ablation, eval_4pref.sbatch)
-    SEAL     results/ablation_unified/seal_4pref/{rollback,no_rollback}/raw/abl4_<agent>*.csv
-             (scripts/ablation_unified/seal_sweep_4pref.sbatch = unified_morl_experiments.py sweep
-             --experiments ABL4): measured circuit execution time and rotation-key size on the
-             47 C++ benchmark instances
+    SEAL     results/ablation_unified/e2e_4pref/{rollback,no_rollback}/<agent>_4pref/e2e_*.csv
+             (scripts/ablation_unified/e2e_4pref.sh -> eval_unified_e2e.sbatch ->
+             run_benchmarks_unified.py, the real-execution protocol of the unified agent):
+             measured circuit execution time and rotation-key size on the C++ benchmarks
 
 Rotation keys are reported as an absolute count: every benchmark expression starts
 scalar with 0 keys, so a "keys reduction (%)" is always <= 0 and not informative.
@@ -31,20 +31,20 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Display label -> (legacy file tag, 10-pref ablation folder, 4-pref ablation folder, SEAL sweep agent)
+# Display label -> (legacy file tag, 10-pref ablation folder, 4-pref ablation folder (also the e2e folder))
 AGENT_SOURCES = {
-    "Unconstrained": ("unconstrained", "unconstrained", "unconstrained_4pref", "abl4_unconstrained"),
-    "V4 Margin Barrier": ("v4_mb_B", "v4_mb", "v4_mb_4pref", "abl4_v4_mb"),
-    "V4 Noise Masking": ("v4_nmask_B", "v4_nmask", "v4_nmask_4pref", "abl4_v4_nmask"),
-    "V4 MB + FiLM": ("v4_mb_film_B", "v4_mb_film", "v4_mb_film_4pref", "abl4_v4_mb_film"),
-    "V5 FOCOPS + NATO-SC": ("v5_focops_natosc", "v5_focops", "v5_focops_4pref", "abl4_v5_focops"),
-    "V5 Lag-PID + NATO-SC": ("v5_lagpid_natosc", "ref_lagpid_natosc", "v5_lagpid_4pref", "abl4_v5_lagpid"),
+    "Unconstrained": ("unconstrained", "unconstrained", "unconstrained_4pref"),
+    "V4 Margin Barrier": ("v4_mb_B", "v4_mb", "v4_mb_4pref"),
+    "V4 Noise Masking": ("v4_nmask_B", "v4_nmask", "v4_nmask_4pref"),
+    "V4 MB + FiLM": ("v4_mb_film_B", "v4_mb_film", "v4_mb_film_4pref"),
+    "V5 FOCOPS + NATO-SC": ("v5_focops_natosc", "v5_focops", "v5_focops_4pref"),
+    "V5 Lag-PID + NATO-SC": ("v5_lagpid_natosc", "ref_lagpid_natosc", "v5_lagpid_4pref"),
 }
 ABLATIONS = ("4pref", "10pref")
 
 
 def result_tag(label: str, source: str, ablation: str = "4pref") -> str:
-    legacy, d10, d4, _ = AGENT_SOURCES[label]
+    legacy, d10, d4 = AGENT_SOURCES[label]
     if source == "legacy":
         return legacy
     return d4 if ablation == "4pref" else d10
@@ -153,23 +153,42 @@ def agent_file(source: str, label: str, set_name: str, legacy_dir: Path, unified
 
 
 # --------------------------------------------------------------------------- #
-# Measured SEAL execution (unified_morl_experiments.py sweep --experiments ABL4)
+# Measured SEAL execution: real compile + SEAL run, the protocol of the unified agent
+# (scripts/run_benchmarks_unified.py via eval_unified_e2e.sbatch; 4-pref ablation:
+# scripts/ablation_unified/e2e_4pref.sh). One CSV per job:
+#   <e2e-dir>/<rollback|no_rollback>/<agent>_4pref/e2e_<benchmark>_b<budget>_<jobid>.csv
+# Each row = one benchmark config x preference: the generated SEAL program is built (Release)
+# and run 3 times, the first is a warm-up, the median of the others is kept:
+#   circuit_execution_time (s), rotation_keys_size (MB) (= GaloisKeys::save_size), ...
 # --------------------------------------------------------------------------- #
-SEAL_TIME = "circuit_execution_time_s"
-SEAL_KEYS = "rotation_keys_size_mb"
-SEAL_NUMERIC = [SEAL_TIME, SEAL_KEYS, "galois_keys_generation_time_s", "total_execution_time_s",
-                "remaining_noise_budget", "measured_used_bits", "est_noise", "initial_est_noise",
-                "final_exec_cost", "final_keys_cost", "w_ops", "w_keys", "compile_time_s"]
-SEAL_BOOL = ["measured_violated", "est_violated", "rollback_used", "agent_violated"]
+SEAL_TIME = "circuit_execution_time (s)"
+SEAL_KEYS = "rotation_keys_size (MB)"
+SEAL_NOISE = "Remaining_noise_budget"
+SEAL_NUMERIC = [SEAL_TIME, SEAL_KEYS, SEAL_NOISE, "galois_keys_generation_time (s)", "total_execution_time (s)",
+                "peak_ram (MB)", "compile_time (s)", "initial_noise_est", "agent_noise_est", "safe_noise_est",
+                "agent_ops", "agent_keys", "safe_ops", "safe_keys", "w_ops", "w_keys", "slot_count"]
+SEAL_BOOL = ["outputs_match", "safety_activated", "agent_violated", "rollback"]
+NOISE_REFERENCE_BITS = 369     # initial BFV budget of the generated programs: used bits = 369 - remaining
+UNCONSTRAINED_BUDGET = 9_000_000
 TIME_LABEL = "Exec time (ms)"
 KEYSIZE_LABEL = "Rot. key size (MB)"
+_E2E_FILE = re.compile(r"_(\d+|local)\.csv$")
+
+
+def _e2e_job(path: Path):
+    m = _E2E_FILE.search(path.name)
+    return int(m.group(1)) if m and m.group(1).isdigit() else -1
 
 
 def load_seal(mode_dir: Path, label: str) -> pd.DataFrame | None:
-    """All sweep rows of one agent (every shard) from <mode_dir>/raw/, or None when there are none."""
-    agent = AGENT_SOURCES[label][3]
-    raw = Path(mode_dir) / "raw"
-    files = sorted(raw.glob(f"{agent}.csv")) + sorted(raw.glob(f"{agent}.shard*.csv"))
+    """All real-execution rows of one agent from <mode_dir>/<agent>_4pref/e2e_*.csv, or None.
+
+    As in merge_eval_results.py, the newest row per (benchmark, budget, preference) is kept
+    when a run was repeated. A measured violation is a remaining noise budget <= 0, or
+    369 - remaining > B for a finite budget B.
+    """
+    folder = Path(mode_dir) / AGENT_SOURCES[label][2]
+    files = sorted(folder.glob("e2e_*.csv"), key=lambda f: (_e2e_job(f), f.name))
     if not files:
         return None
     df = pd.concat([pd.read_csv(f, dtype=str) for f in files], ignore_index=True)
@@ -182,26 +201,38 @@ def load_seal(mode_dir: Path, label: str) -> pd.DataFrame | None:
             df[c] = df[c].astype(str).str.strip().str.lower().map({"true": True, "false": False})
     df["budget"] = pd.to_numeric(df["budget"], errors="coerce").astype("Int64")
     df["ok"] = df["status"].astype(str).eq("ok") & df[SEAL_TIME].notna() & df[SEAL_KEYS].notna()
+    rem = df[SEAL_NOISE] if SEAL_NOISE in df.columns else pd.Series(np.nan, index=df.index)
+    used = NOISE_REFERENCE_BITS - rem
+    finite = df["budget"].astype(float) < UNCONSTRAINED_BUDGET
+    df["measured_violated"] = ((rem <= 0) | (finite & (used > df["budget"].astype(float)))).where(rem.notna())
     return df
 
 
 def seal_subset(df: pd.DataFrame, budget: int, within_only: bool = False) -> pd.DataFrame:
     sub = df[df["budget"] == budget]
     if within_only:
-        sub = sub[sub["initial_est_noise"] <= budget]
+        sub = sub[sub["initial_noise_est"] <= budget]
     return sub
+
+
+def _rate(series) -> float:
+    s = series.dropna()
+    return float(100 * s.astype(bool).mean()) if len(s) else np.nan
 
 
 def seal_stats(sub: pd.DataFrame) -> dict:
     ok = sub[sub["ok"]]
-    viol = ok["measured_violated"].dropna() if "measured_violated" in ok else pd.Series(dtype=bool)
+    viol = ok["measured_violated"].dropna()
     return {
         "points": len(sub), "ok": len(ok),
         "time_ms": float(1000 * ok[SEAL_TIME].mean()) if len(ok) else np.nan,
         "time_ms_median": float(1000 * ok[SEAL_TIME].median()) if len(ok) else np.nan,
         "keys_mb": float(ok[SEAL_KEYS].mean()) if len(ok) else np.nan,
-        "meas_viol_pct": float(100 * viol.astype(bool).mean()) if len(viol) else np.nan,
+        "noise_left": float(ok[SEAL_NOISE].mean()) if len(ok) and SEAL_NOISE in ok else np.nan,
+        "meas_viol_pct": _rate(viol),
         "meas_viol": int(viol.astype(bool).sum()) if len(viol) else 0,
+        "outputs_ok_pct": _rate(ok["outputs_match"]) if "outputs_match" in ok else np.nan,
+        "rollback_pct": _rate(sub["safety_activated"]) if "safety_activated" in sub else np.nan,
     }
 
 
@@ -231,7 +262,7 @@ def seal_budget_table(frames: dict, labels: list, budgets: list, budget_label: d
         if df is None:
             continue
         row = {"Agent": label}
-        t, k, v, logs = [], [], [], []
+        t, k, v, logs, oc = [], [], [], [], []
         for b in budgets:
             sub = seal_subset(df, b, within_only)
             st = seal_stats(sub)
@@ -241,6 +272,7 @@ def seal_budget_table(frames: dict, labels: list, budgets: list, budget_label: d
             row[f"B={lb} measured viol. (%)"] = st["meas_viol_pct"]
             row[f"B={lb} ok/points"] = f"{st['ok']}/{st['points']}"
             t.append(st["time_ms"]); k.append(st["keys_mb"]); v.append(st["meas_viol_pct"])
+            oc.append(st["outputs_ok_pct"])
             if ref is not None:
                 ratio = seal_time_ratio(sub, seal_subset(ref, b, within_only))
                 if not pd.isna(ratio):
@@ -248,6 +280,7 @@ def seal_budget_table(frames: dict, labels: list, budgets: list, budget_label: d
         row[f"Average {TIME_LABEL}"] = _nanmean(t)
         row[f"Average {KEYSIZE_LABEL}"] = _nanmean(k)
         row["Average measured viol. (%)"] = _nanmean(v)
+        row["Outputs correct (%)"] = _nanmean(oc)
         row[f"Time vs {ref_label} (geo-mean)"] = float(np.exp(np.mean(logs))) if logs else np.nan
         rows.append(row)
     return pd.DataFrame(rows)
@@ -269,6 +302,7 @@ def seal_compact(t: pd.DataFrame, budget_lbls: list, ref_label: str) -> pd.DataF
                           f" / {_fmt(r['Average measured viol. (%)'], '.1f')}%")
         ratio = r[f"Time vs {ref_label} (geo-mean)"]
         row[f"Time vs {ref_label}"] = "" if pd.isna(ratio) else f"{ratio:.3f}x"
+        row["Outputs correct"] = f"{_fmt(r['Outputs correct (%)'], '.1f')}%"
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -284,8 +318,9 @@ def seal_long_table(frames: dict, labels: list, budgets: list, budget_label: dic
             st = seal_stats(seal_subset(df, b, within_only))
             rows.append({"Agent": label, "Budget": budget_label[b], "Points": st["points"], "OK": st["ok"],
                          f"Mean {TIME_LABEL}": st["time_ms"], f"Median {TIME_LABEL}": st["time_ms_median"],
-                         f"Mean {KEYSIZE_LABEL}": st["keys_mb"], "Measured violations": st["meas_viol"],
-                         "Measured violation rate (%)": st["meas_viol_pct"]})
+                         f"Mean {KEYSIZE_LABEL}": st["keys_mb"], "Mean remaining noise (bits)": st["noise_left"],
+                         "Measured violations": st["meas_viol"], "Measured violation rate (%)": st["meas_viol_pct"],
+                         "Outputs correct (%)": st["outputs_ok_pct"], "Rollback rate (%)": st["rollback_pct"]})
     return pd.DataFrame(rows)
 
 

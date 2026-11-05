@@ -34,10 +34,11 @@ Methodology:
        exp2_results.md, and run_metadata.json with descriptive experiment names
        (no 2A/2B/etc. prefixes).
 
-    6. Measured on SEAL/BFV (no rollback): circuit execution time (ms), rotation-key size (MB)
-       and measured violation rate per agent and budget, from the real-execution sweep
-       (scripts/ablation_unified/seal_sweep_4pref.sbatch with ROLLBACK=0) on the 47 C++
-       benchmark instances, plus the per-preference breakdown.
+    6. Measured on SEAL/BFV (no rollback): circuit execution time (ms), rotation-key size (MB),
+       measured violation rate and output correctness per agent and budget, measured exactly like
+       the unified agent of train_unified_noise.sbatch (run_benchmarks_unified.py: compile each C++
+       benchmark with the agent, build the SEAL program, 3 runs, first = warm-up, median), here via
+       scripts/ablation_unified/e2e_4pref.sh <agent> 0 (raw agent output), plus the per-preference breakdown.
 
 Result sources:
     --source unified (default)  results/ablation_unified/<agent>_4pref/eval_<jobid>/original.csv
@@ -47,7 +48,7 @@ Result sources:
     --source legacy  hpc_results/rl_test_results/original_<tag>.xlsx (older runs: one scalar
              cost, no exec/keys split; the objective tables are then skipped).
     --source auto    unified when results exist for all 6 agents, else legacy.
-    --seal-dir       results/ablation_unified/seal_4pref (reads its no_rollback/raw/ CSVs);
+    --e2e-dir        results/ablation_unified/e2e_4pref (reads no_rollback/<agent>_4pref/e2e_*.csv);
              the measured section is skipped when it has no results.
 
 Exit codes: 0 ok | 1 unexpected error | 2 data/validation error
@@ -106,7 +107,7 @@ from objective_metrics import EXEC_LABEL, KEYS_LABEL
 
 DEFAULT_RESULTS = REPO_ROOT / "hpc_results" / "rl_test_results"
 DEFAULT_UNIFIED = REPO_ROOT / "results" / "ablation_unified"
-DEFAULT_SEAL = DEFAULT_UNIFIED / "seal_4pref"
+DEFAULT_SEAL = DEFAULT_UNIFIED / "e2e_4pref"
 SEAL_MODE = "no_rollback"   # Experiment 2 = raw agent output
 DEFAULT_BENCHMARK = RL_DIR / "fhe_rl" / "datasets" / "benchmarks.txt"
 DEFAULT_OUT = HERE / "outputs"
@@ -609,13 +610,13 @@ OBJ_EXPLAIN = (
 
 
 SEAL_EXPLAIN = (
-    "Real execution of the compiled programs on SEAL/BFV {mode}: every agent compiles the 47 non-DNN C++ "
-    "benchmark instances (`unified_morl_experiments.py sweep --experiments ABL4`, results in `{src}`) for every "
-    "budget and its 4 training preferences, {subset}. Each cell is `mean circuit execution time / mean rotation-key "
-    "size (Galois keys, `save_size`) / measured violation rate`; a measured violation is `369 - remaining noise "
-    "budget > B` or a remaining budget <= 0. `Time vs Unconstrained` is the geometric mean, over the points both "
-    "agents executed, of the time ratio (< 1 = faster). This is a different benchmark set from the 69 VecLang "
-    "expressions above.\n"
+    "Real execution on SEAL/BFV {mode}, the same protocol as the evaluation of the unified agent: "
+    + "the C++ benchmarks of the unified agent's real-execution evaluation (13 benchmarks, 46 configurations: `scripts/ablation_unified/e2e_4pref.sh` -> `eval_unified_e2e.sbatch` -> `run_benchmarks_unified.py`, results in `{src}`) are compiled by CHEHAB with each agent at every budget and its 4 training preferences; the generated SEAL program is built (Release) and run 3 times, the first run is a warm-up and the median of the others is kept, and the decrypted outputs are checked" + ". {subset}. "
+    "Each cell is `mean circuit execution time / mean rotation-key size (GaloisKeys::save_size) / measured violation "
+    "rate`; a measured violation is a remaining noise budget <= 0 or `369 - remaining > B`. `Time vs Unconstrained` "
+    "is the geometric mean, over the points both agents executed, of the time ratio (< 1 = faster); `Outputs "
+    "correct` = decrypted results equal to the expected ones. These are the C++ benchmarks, a different set from "
+    "the 69 VecLang expressions above.\n"
 )
 
 
@@ -733,7 +734,7 @@ def build_report(ctx: dict) -> str:
     L.append("## Measured on SEAL: Execution Time and Rotation-Key Size (No Rollback)\n")
     if ctx["seal"] is not None:
         L.append(SEAL_EXPLAIN.format(mode="without rollback (`CHEHAB_RL_ROLLBACK=0`, raw agent output)",
-                                     src=ctx["seal_rel"], subset="all points"))
+                                     src=ctx["seal_rel"], subset="All points"))
         L.append(df_to_md(om.seal_compact(ctx["seal"], BUDGET_LBLS, UNC)) + "\n")
         L.append("![Measured](seal_measured.png)\n")
         if ctx["seal_pref"] is not None and not ctx["seal_pref"].empty:
@@ -742,9 +743,9 @@ def build_report(ctx: dict) -> str:
     else:
         L.append(
             "> [!NOTE]\n"
-            f"> No SEAL results in `{ctx['seal_rel']}/{SEAL_MODE}/raw/`. Run "
-            "`sbatch --export=ALL,ROLLBACK=0 scripts/ablation_unified/seal_sweep_4pref.sbatch` "
-            "(or `bash scripts/ablation_unified/launch_4pref_eval.sh`) and rerun.\n"
+            f"> No SEAL results in `{ctx['seal_rel']}/{SEAL_MODE}/<agent>_4pref/`. Run "
+            "`bash scripts/ablation_unified/e2e_4pref.sh all 0` on the cluster, copy "
+            "`results/ablation_unified/e2e_4pref/` here and rerun.\n"
         )
 
     L.append("## Method & Configuration Mapping\n")
@@ -819,7 +820,7 @@ def run(args) -> int:
     cfg = pd.DataFrame([{"Label": k, "Result tag": om.result_tag(k, source, ablation),
                          "Configuration": AGENT_CONFIG[config_key(source, ablation)][k]} for k in AGENTS])
 
-    # Measured SEAL execution (no rollback), 47 C++ benchmark instances
+    # Measured SEAL execution (no rollback), real compile + SEAL run of the C++ benchmarks
     seal_dir = Path(args.seal_dir).resolve()
     seal_frames = {k: om.load_seal(seal_dir / SEAL_MODE, k) for k in AGENTS}
     seal_frames = {k: v for k, v in seal_frames.items() if v is not None}
@@ -830,7 +831,7 @@ def run(args) -> int:
         t_seal_pref = om.seal_preference_table(seal_frames, [a for a in (UNC, CON) if a in seal_frames], BUDGETS)
         print(f"[seal] {SEAL_MODE}: {', '.join(f'{k} ({len(v)} rows)' for k, v in seal_frames.items())}")
     else:
-        print(f"[seal] no results in {seal_dir / SEAL_MODE / 'raw'} (measured section skipped)")
+        print(f"[seal] no results in {seal_dir / SEAL_MODE} (measured section skipped)")
 
     pair = [(UNC, UNC), (CON, CON_LABEL)]
     all_agents = [(a, a) for a in AGENTS]
@@ -998,7 +999,7 @@ def run(args) -> int:
         "budgets": BUDGETS,
         "preferences_per_expression": n_pref,
         "seal_measured": ({"dir": rel(seal_dir / SEAL_MODE), "agents": {k: len(v) for k, v in seal_frames.items()},
-                           "time": "circuit_execution_time_s (reported in ms)", "key_size": "rotation_keys_size_mb"}
+                           "time": "circuit_execution_time (s), reported in ms", "key_size": "rotation_keys_size (MB)", "protocol": "run_benchmarks_unified.py: Release build, 3 runs, first = warm-up, median"}
                           if seal_frames else "no results"),
         "objectives": ({"exec_cost": "Agent Final Ops (C_exec, exec_cost_mo); reported as reduction vs Initial Ops",
                         "rotation_keys": "Agent Final Keys (C_keys, unique rotation keys); reported as mean count"}
@@ -1088,8 +1089,8 @@ def main(argv=None) -> int:
     ap.add_argument("--results-dir", default=str(DEFAULT_RESULTS), help="legacy: directory with original_<tag>.xlsx workbooks")
     ap.add_argument("--unified-dir", default=str(DEFAULT_UNIFIED),
                     help="unified: results/ablation_unified (<agent>[_4pref]/eval_<job>/original.csv)")
-    ap.add_argument("--seal-dir", default=str(DEFAULT_SEAL),
-                    help=f"measured SEAL sweep (reads <seal-dir>/{SEAL_MODE}/raw/abl4_<agent>*.csv)")
+    ap.add_argument("--e2e-dir", "--seal-dir", dest="seal_dir", default=str(DEFAULT_SEAL),
+                    help=f"real compile + SEAL results (reads <e2e-dir>/{SEAL_MODE}/<agent>_4pref/e2e_*.csv)")
     ap.add_argument("--benchmark", default=str(DEFAULT_BENCHMARK), help="path to benchmarks.txt")
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="output directory")
     args = ap.parse_args(argv)

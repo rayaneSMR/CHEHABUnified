@@ -27,13 +27,15 @@ def run_agent_unified(
     constraint_metric: str = "noise",
     constraint_method: str = "nato_sc",
     log_file: str = None,
+    rollback: bool = True,
 ):
     """Unified agent inside the C++ compiler (real compile + SEAL execution evaluation).
 
     Runs the joint agent (ops + rotation rules) on the expression written by the
     compiler, under `budget`, with preference `preference` = [w_ops, w_keys], then
     applies the same safety rollback as `fhe_rl test` (best checkpoint within budget,
-    scored with the preference). Writes the safe expression back for the compiler,
+    scored with the preference). Writes the safe expression back for the compiler
+    (or, with rollback=False, the agent's final expression: raw output, no rollback),
     and appends one JSON line with the RL-side numbers to `log_file` if given.
     """
     import json
@@ -68,7 +70,8 @@ def run_agent_unified(
     res = _run_single_episode(model, env, expr, budget, estimator, None, constraint_metric,
                               preference_vector=preference)
     safe_expr = res["safe_expr"]
-    _write_compiler_output(safe_expr, output_file)
+    compiled_expr = safe_expr if rollback else res["agent_final"]["expression"]
+    _write_compiler_output(compiled_expr, output_file)
 
     ops0, keys0 = _get_split_costs(expr)
     agent_ops, agent_keys = _get_split_costs(res["agent_final"]["expression"])
@@ -83,10 +86,13 @@ def run_agent_unified(
         "safety_activated": res["safety_activated"], "best_valid_step": res["best_valid_step"],
         "rl_steps": res["steps"], "rl_time_ms": round(res["elapsed_ms"], 1),
         "input_expression": expr, "safe_expression": safe_expr,
+        "rollback_enabled": bool(rollback), "compiled": "safe" if rollback else "agent",
     }
     print(f"[unified run] w={preference} budget={budget}: ops {ops0}->{safe_ops}, keys {keys0}->{safe_keys}, "
           f"noise est {res['initial_noise']:.1f}->{res['safe_noise']:.1f}, "
-          f"rollback={'ON' if res['safety_activated'] else 'off'}", flush=True)
+          f"rollback={'ON' if res['safety_activated'] else 'off'}"
+          + ("" if rollback else f" (disabled: compiling the agent's output, ops {agent_ops}, keys {agent_keys})"),
+          flush=True)
     if log_file:
         with open(log_file, "a") as f:
             f.write(json.dumps(record) + "\n")
