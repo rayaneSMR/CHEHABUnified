@@ -1,0 +1,519 @@
+
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=25mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{microtype}
+\usepackage{enumitem}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\allowdisplaybreaks
+
+\newtheorem{lemma}{Lemma}
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+\newcommand{\ct}{\mathrm{ct}}
+\newcommand{\ctadd}{\mathrm{ct}_{\mathrm{add}}}
+\newcommand{\ctmult}{\mathrm{ct}_{\mathrm{mult}}}
+\newcommand{\ctrelin}{\mathrm{ct}_{\mathrm{relin}}}
+\newcommand{\ctpmult}{\mathrm{ct}_{\mathrm{pmult}}}
+\newcommand{\ctpadd}{\mathrm{ct}_{\mathrm{padd}}}
+\newcommand{\ctneg}{\mathrm{ct}_{\mathrm{neg}}}
+\newcommand{\ctsub}{\mathrm{ct}_{\mathrm{sub}}}
+\newcommand{\ctpsub}{\mathrm{ct}_{\mathrm{psub}}}
+\newcommand{\vadd}{v_{\mathrm{add}}}
+\newcommand{\vmult}{v_{\mathrm{mult}}}
+\newcommand{\vrelin}{v_{\mathrm{relin}}}
+\newcommand{\vpmult}{v_{\mathrm{pmult}}}
+\newcommand{\vpadd}{v_{\mathrm{padd}}}
+\newcommand{\vneg}{v_{\mathrm{neg}}}
+\newcommand{\vsub}{v_{\mathrm{sub}}}
+\newcommand{\vpsub}{v_{\mathrm{psub}}}
+\newcommand{\N}{\mathbb{N}}
+
+\title{SEAL 2.3.1 Manual: Appendix on Strict Noise Bounds}
+\author{Transcription of Appendix, Lemmas 9--17}
+\date{}
+
+\begin{document}
+\maketitle
+
+\textbf{Source.} Kim Laine, \emph{Simple Encrypted Arithmetic Library (SEAL) 2.3.1},
+Appendix, printed pages 27--34 (PDF pages 27--34).
+
+\textbf{Scope.} This file transcribes the appendix lemmas and their accompanying
+proofs or explanations concerning strict bounds on invariant noise. The
+manual's notation and lemma numbering are retained. No heuristic bounds from
+Section 6 are substituted.
+
+\section*{Initial Noise}
+
+\begin{lemma}[Lemma 9]
+Let $\ct=(c_0,c_1)$ be a fresh encryption of a message $m\in R_t$.
+The noise $v$ in $\ct$ satisfies
+\[
+  \norm{v}
+  \leq \frac{r_t(q)}{q}\norm{m}
+       +\frac{tB}{q}(2n+1).
+\]
+\end{lemma}
+
+\textbf{Proof.}
+Let $\ct=(c_0,c_1)$ be an encryption of $m$ under the public key
+$\mathrm{pk}=(p_0,p_1)=([-(as+e)]_q,a)$. Then, for some polynomials
+$k_0,k_1,k$,
+\begin{align*}
+\frac{t}{q}(c_0+c_1s)
+&=\frac{t}{q}
+  \bigl(\Delta m+p_0u+e_0+k_0q+p_1us+e_1s+k_1qs\bigr)\\
+&=m+\frac{t}{q}
+  \left(\frac{-r_t(q)m}{t}+p_0u+e_0+p_1us+e_1s\right)
+  +t(k_0+k_1s)\\
+&=m+\frac{t}{q}
+  \left(\frac{-r_t(q)m}{t}+(-as-e+kq)u+e_0+aus+e_1s\right)
+  +t(k_0+k_1s)\\
+&=m+\frac{t}{q}
+  \left(\frac{-r_t(q)m}{t}-eu+e_1+e_2s\right)
+  +t(k_0+k_1s+ku).
+\end{align*}
+Thus the noise is
+\[
+  v=\frac{t}{q}
+  \left(\frac{-r_t(q)}{t}m-eu+e_1+e_2s\right).
+\]
+To bound $\norm{v}$, use the fact that the error polynomials sampled from
+$\chi$ have coefficients bounded by $B$, and that $\norm{s}=\norm{u}=1$.
+Then
+\[
+  \norm{v}\leq \frac{r_t(q)}{q}\norm{m}
+                  +\frac{tB}{q}(2n+1).
+\]
+\hfill$\square$
+
+\section*{Addition}
+
+\begin{lemma}[Lemma 10]
+Let $\ct_1=(c_0,c_1,\ldots,c_j)$ and
+$\ct_2=(d_0,d_1,\ldots,d_k)$ be two ciphertexts encrypting
+$m_1,m_2\in R_t$, and having noises $v_1,v_2$, respectively.
+Then the noise $\vadd$ in their sum $\ctadd$ is
+\[
+  \vadd=v_1+v_2,
+\]
+and satisfies
+\[
+  \norm{\vadd}\leq \norm{v_1}+\norm{v_2}.
+\]
+\end{lemma}
+
+\textbf{Proof.}
+By definition of homomorphic addition, $\ctadd$ encrypts $[m_1+m_2]_t$.
+Let $[m_1+m_2]_t=m_1+m_2+at$ for some integer-coefficient polynomial $a$.
+Suppose without loss of generality that $\max(j,k)=j$, so that
+\[
+  \ctadd=(c_0+d_0,\ldots,c_k+d_k,c_{k+1},\ldots,c_j).
+\]
+By definition of noise in $\ct_1$ and $\ct_2$,
+\[
+  \frac{t}{q}\ct_1(s)=m_1+v_1+a_1t,\qquad
+  \frac{t}{q}\ct_2(s)=m_2+v_2+a_2t,
+\]
+for some integer-coefficient polynomials $a_1,a_2$. Therefore
+\begin{align*}
+\frac{t}{q}\ctadd(s)
+&=\frac{t}{q}\ct_1(s)+\frac{t}{q}\ct_2(s)\\
+&=m_1+v_1+a_1t+m_2+v_2+a_2t\\
+&=[m_1+m_2]_t+(m_1+m_2-[m_1+m_2]_t)+v_1+v_2+(a_1+a_2)t\\
+&=[m_1+m_2]_t+v_1+v_2+(a_1+a_2-a)t.
+\end{align*}
+Hence $\vadd=v_1+v_2$, and
+\[
+  \norm{\vadd}=\norm{v_1+v_2}
+  \leq \norm{v_1}+\norm{v_2}.
+\]
+\hfill$\square$
+
+\section*{Multiplication}
+
+\begin{lemma}[Lemma 11]
+Let $\ct_1=(x_0,\ldots,x_{j_1})$ be a ciphertext of size $j_1+1$
+encrypting $m_1$ with noise $v_1$, and let
+$\ct_2=(y_0,\ldots,y_{j_2})$ be a ciphertext of size $j_2+1$
+encrypting $m_2$ with noise $v_2$. Let $N_{m_1}$ and $N_{m_2}$
+be upper bounds on the number of non-zero terms in the polynomials
+$m_1$ and $m_2$, respectively. Then the noise $\vmult$ in the product
+$\ctmult$ satisfies
+\begin{align*}
+\norm{\vmult}\leq{}&
+\left[
+ (N_{m_1}+n)\norm{m_1}
+ +\frac{nt}{2}\frac{n^{j_1+1}-1}{n-1}
+\right]\norm{v_2}\\
+&+\left[
+ (N_{m_2}+n)\norm{m_2}
+ +\frac{nt}{2}\frac{n^{j_2+1}-1}{n-1}
+\right]\norm{v_1}\\
+&+3n\norm{v_1}\norm{v_2}
+ +\frac{t}{2q}\left(\frac{n^{j_1+j_2+1}-1}{n-1}\right).
+\end{align*}
+\end{lemma}
+
+\textbf{Proof.}
+By definition of homomorphic multiplication, the ciphertext
+$\ctmult=(c_0,\ldots,c_{j_1+j_2})$ is such that for
+$0\leq i\leq j_1+j_2$, for some polynomials $\epsilon_i$ with
+coefficients in $(-\frac12,\frac12]$, and for some polynomials
+$A_i$ with integer coefficients,
+\[
+ c_i=
+ \left[\frac{t}{q}\left(\sum_{k+\ell=i}x_ky_\ell\right)\right]_q
+ =\frac{t}{q}\left(\sum_{k+\ell=i}x_ky_\ell\right)+A_iq
+ =\frac{t}{q}\left(\sum_{k+\ell=i}x_ky_\ell\right)+\epsilon_i+A_iq.
+\]
+Also, by definition $\ctmult$ encrypts $[m_1m_2]_t$, and
+$[m_1m_2]_t=m_1m_2+at$ for some integer-coefficient polynomial $a$.
+By definition of noise in $\ct_1$ and $\ct_2$, for some
+integer-coefficient polynomials $a_1,a_2$,
+\[
+  \frac{t}{q}\ct_1(s)=m_1+v_1+a_1t,\qquad
+  \frac{t}{q}\ct_2(s)=m_2+v_2+a_2t.
+\]
+We compute
+\begin{align*}
+\frac{t}{q}\ctmult(s)
+&=\frac{t}{q}(c_0,\ldots,c_{j_1+j_2})(s)\\
+&=\frac{t}{q}\left[
+ \left(\frac{t}{q}(x_0y_0)+\epsilon_0+A_0q\right)
+ +\cdots+
+ \left(\frac{t}{q}(x_{j_1}y_{j_2})+\epsilon_{j_1+j_2}
+       +A_{j_1+j_2}q\right)s^{j_1+j_2}
+ \right]\\
+&=\frac{t}{q}\cdot\frac{t}{q}
+ \left[\sum_{i=0}^{j_1+j_2}
+       \left(\sum_{k+\ell=i}x_ky_\ell\right)s^i\right]
+ +\frac{t}{q}\sum_{i=0}^{j_1+j_2}\epsilon_i s^i
+ +\left(\sum_{i=0}^{j_1+j_2}A_is^i\right)t\\
+&=\frac{t}{q}\ct_1(s)\cdot\frac{t}{q}\ct_2(s)
+ +\frac{t}{q}\sum_{i=0}^{j_1+j_2}\epsilon_i s^i
+ +\left(\sum_{i=0}^{j_1+j_2}A_is^i\right)t\\
+&=(m_1+v_1+a_1t)(m_2+v_2+a_2t)
+ +\frac{t}{q}\sum_{i=0}^{j_1+j_2}\epsilon_i s^i
+ +\left(\sum_{i=0}^{j_1+j_2}A_is^i\right)t\\
+&=[m_1m_2]_t+m_1v_2+m_2v_1+v_1v_2
+ +(v_1a_2+v_2a_1)t
+ +\frac{t}{q}\sum_{i=0}^{j_1+j_2}\epsilon_i s^i\\
+&\quad+\left(m_1a_2+m_2a_1+a_1a_2t
+             +\sum_{i=0}^{j_1+j_2}A_is^i-a\right)t.
+\end{align*}
+In the last step we used $m_1m_2=[m_1m_2]_t-at$. Thus
+\[
+  \vmult=m_1v_2+m_2v_1+v_1v_2
+       +(v_1a_2+v_2a_1)t
+       +\frac{t}{q}\sum_{i=0}^{j_1+j_2}\epsilon_i s^i.
+\]
+
+To bound the new noise, first note that
+\begin{equation}
+ \frac{t}{q}\left\lVert\sum_{i=0}^{j_1+j_2}\epsilon_i s^i\right\rVert
+ \leq \frac{t}{2q}
+       \left(\frac{n^{j_1+j_2+1}-1}{n-1}\right).
+ \tag{1}
+\end{equation}
+Next, write $a_it=\frac{t}{q}\ct_i(s)-m_i-v_i$, and note that
+\begin{equation}
+ \norm{a_it}\leq
+ \frac{t}{2}\frac{n^{j_i+1}-1}{n-1}
+ +\norm{m_i}+\norm{v_i}.
+ \tag{2}
+\end{equation}
+Finally, using (1) and (2), we can bound the noise growth in multiplication:
+\begin{align*}
+\norm{\vmult}
+&=\left\lVert m_1v_2+m_2v_1+v_1v_2
+ +(v_1a_2+v_2a_1)t
+ +\frac{t}{q}\sum_{i=0}^{j_1+j_2}\epsilon_i s^i\right\rVert\\
+&\leq \norm{m_1v_2}+\norm{m_2v_1}+\norm{v_1v_2}
+ +\norm{(v_1a_2+v_2a_1)t}
+ +\frac{t}{q}\left\lVert\sum_{i=0}^{j_1+j_2}\epsilon_i s^i\right\rVert\\
+&\leq N_{m_1}\norm{m_1}\norm{v_2}
+ +N_{m_2}\norm{m_2}\norm{v_1}
+ +n\norm{v_1}\norm{v_2}\\
+&\quad+n\norm{v_1}
+ \left(\frac{t}{2}\frac{n^{j_2+1}-1}{n-1}
+       +\norm{m_2}+\norm{v_2}\right)\\
+&\quad+n\norm{v_2}
+ \left(\frac{t}{2}\frac{n^{j_1+1}-1}{n-1}
+       +\norm{m_1}+\norm{v_1}\right)
+ +\frac{t}{2q}\left(\frac{n^{j_1+j_2+1}-1}{n-1}\right)\\
+&=
+ \left[(N_{m_1}+n)\norm{m_1}
+       +\frac{nt}{2}\frac{n^{j_1+1}-1}{n-1}\right]\norm{v_2}\\
+&\quad+
+ \left[(N_{m_2}+n)\norm{m_2}
+       +\frac{nt}{2}\frac{n^{j_2+1}-1}{n-1}\right]\norm{v_1}\\
+&\quad+3n\norm{v_1}\norm{v_2}
+ +\frac{t}{2q}\left(\frac{n^{j_1+j_2+1}-1}{n-1}\right).
+\end{align*}
+\hfill$\square$
+
+\section*{Relinearization}
+
+\begin{lemma}[Lemma 12]
+Let $\ct$ be a ciphertext of size $M+1$ encrypting $m$, and having
+noise $v$. Let $\ctrelin$ of size $N+1$ be the ciphertext encrypting
+$m$, obtained by the relinearization of $\ct$, where
+$2\leq N+1<M+1$. Then the noise $\vrelin$ in $\ctrelin$ is given by
+\[
+ \vrelin
+ =v-\frac{t}{q}
+   \sum_{j=0}^{M-N-1}\sum_{i=0}^{\ell}
+   e_{M-j,i}\,c_{M-j}^{(i)},
+\]
+and can be bounded as
+\[
+ \norm{\vrelin}\leq \norm{v}
+       +\frac{t}{q}(M-N)nB(\ell+1)w.
+\]
+\end{lemma}
+
+\textbf{Proof.}
+Relinearization of a ciphertext from size $M+1$ to size $N+1$,
+where $2\leq N+1<M+1$, consists of $M-N$ ``one-step''
+relinearizations. In each step, the current ciphertext
+$(c_0,c_1,\ldots,c_k)$ is transformed to an intermediate ciphertext
+$\ct'=(c'_0,c'_1,\ldots,c'_{k-1})$ using the appropriate evaluation key
+\[
+ \mathrm{evk}_k=
+ \left[
+   \left([-(a_{k,i}s+e_{k,i})+w^is^k]_q,\ a_{k,i}\right)
+   : i=0,\ldots,\ell
+ \right].
+\]
+In the following step, $\ct'$ becomes the current ciphertext, and so on
+until the intermediate ciphertext produced is of size $N+1$, at which
+point it is output as $\ctrelin$.
+
+The input ciphertext is $\ct=(c_0,c_1,\ldots,c_M)$, and after the
+first one-step relinearization, the intermediate ciphertext is
+$\ct'=(c'_0,c'_1,\ldots,c'_{M-1})$, where
+\[
+ c'_0=c_0+\sum_{i=0}^{\ell}\mathrm{evk}_M[i][0]c_M^{(i)},
+ \qquad
+ c'_1=c_1+\sum_{i=0}^{\ell}\mathrm{evk}_M[i][1]c_M^{(i)},
+\]
+and $c'_j=c_j$ for $2\leq j\leq M-1$.
+So, for some integer-coefficient polynomials $a_i$, where
+$0\leq i\leq \ell+1$,
+\begin{align*}
+\frac{t}{q}\ct'(s)
+&=\frac{t}{q}(c'_0+c'_1s+\cdots+c'_{M-1}s^{M-1})\\
+&=\frac{t}{q}\left[
+ c_0+\sum_{i=0}^{\ell}\mathrm{evk}_M[i][0]c_M^{(i)}
+ +\left(c_1+\sum_{i=0}^{\ell}\mathrm{evk}_M[i][1]c_M^{(i)}\right)s
+ +\cdots+c_{M-1}s^{M-1}
+ \right]\\
+&=\frac{t}{q}\left(
+ \sum_{i=0}^{\ell}\mathrm{evk}_M[i][0]c_M^{(i)}
+ +s\sum_{i=0}^{\ell}\mathrm{evk}_M[i][1]c_M^{(i)}
+ \right)
+ +\frac{t}{q}(c_0+c_1s+\cdots+c_{M-1}s^{M-1})\\
+&=\frac{t}{q}\left(
+ -\sum_{i=0}^{\ell}e_{M,i}c_M^{(i)}
+ +\sum_{i=0}^{\ell}a_iqc_M^{(i)}
+ +s^M\sum_{i=0}^{\ell}w^ic_M^{(i)}
+ \right)
+ +\frac{t}{q}(c_0+c_1s+\cdots+c_{M-1}s^{M-1})\\
+&=-\frac{t}{q}\sum_{i=0}^{\ell}e_{M,i}c_M^{(i)}
+ +\frac{t}{q}\left(c_0+c_1s+\cdots+c_{M-1}s^{M-1}+c_Ms^M\right)
+ +t\sum_{i=0}^{\ell}a_ic_M^{(i)}\\
+&=m+v-\frac{t}{q}\sum_{i=0}^{\ell}e_{M,i}c_M^{(i)}
+ +\left(a_{\ell+1}+\sum_{i=0}^{\ell}a_ic_M^{(i)}\right)t.
+\end{align*}
+Hence, the noise grows by an additive factor
+$-\frac{t}{q}\sum_{i=0}^{\ell}e_{M,i}c_M^{(i)}$
+in a one-step relinearization. Iterating this process gives
+\[
+ \vrelin=v-\frac{t}{q}
+ \sum_{j=0}^{M-N-1}\sum_{i=0}^{\ell}
+ e_{M-j,i}c_{M-j}^{(i)}.
+\]
+Bounding $\norm{\vrelin}$,
+\begin{align*}
+\norm{\vrelin}
+&=\left\lVert v-\frac{t}{q}
+ \sum_{j=0}^{M-N-1}\sum_{i=0}^{\ell}
+ e_{M-j,i}c_{M-j}^{(i)}\right\rVert\\
+&\leq \norm{v}+\frac{t}{q}
+ \sum_{j=0}^{M-N-1}\sum_{i=0}^{\ell}
+ \norm{e_{M-j,i}c_{M-j}^{(i)}}\\
+&\leq \norm{v}+\frac{t}{q}(M-N)nB(\ell+1)w.
+\end{align*}
+\hfill$\square$
+
+\section*{Plain Multiplication}
+
+\begin{lemma}[Lemma 13]
+Let $\ct=(x_0,\ldots,x_j)$ be a ciphertext encrypting $m_1$ with
+noise $v$, and let $m_2$ be a plaintext polynomial. Let $N_{m_2}$
+be an upper bound on the number of non-zero terms in $m_2$.
+Let $\ctpmult$ denote the ciphertext obtained by plain multiplication
+of $\ct$ with $m_2$. Then the noise in the plain product $\ctpmult$
+is $\vpmult=m_2v$, and
+\[
+  \norm{\vpmult}\leq N_{m_2}\norm{m_2}\norm{v}.
+\]
+\end{lemma}
+
+\textbf{Proof.}
+By definition, $\ctpmult=(m_2x_0,\ldots,m_2x_j)$. Hence, for some
+integer-coefficient polynomials $a,a'$,
+\begin{align*}
+\frac{t}{q}\ctpmult(s)
+&=\frac{t}{q}(m_2x_0+m_2x_1s+\cdots+m_2x_js^j)\\
+&=m_2\frac{t}{q}(x_0+x_1s+\cdots+x_js^j)\\
+&=m_2\frac{t}{q}\ct(s)\\
+&=m_2(m_1+v+at)\\
+&=m_1m_2+m_2v+m_2at\\
+&=[m_1m_2]_t+m_2v+(m_2a-a')t,
+\end{align*}
+where in the last line we used $[m_1m_2]_t=m_1m_2+a't$.
+Hence $\vpmult=m_2v$ and
+\[
+  \norm{\vpmult}\leq N_{m_2}\norm{m_2}\norm{v}.
+\]
+\hfill$\square$
+
+\section*{Plain Addition}
+
+\begin{lemma}[Lemma 14]
+Let $\ct=(x_0,\ldots,x_j)$ be a ciphertext encrypting $m_1$ with
+noise $v$, and let $m_2$ be a plaintext polynomial. Let $\ctpadd$
+denote the ciphertext obtained by plain addition of $\ct$ with $m_2$.
+Then the noise in $\ctpadd$ is
+\[
+  \vpadd=v-\frac{r_t(q)}{q}m_2,
+\]
+and
+\[
+  \norm{\vpadd}\leq \norm{v}+\frac{r_t(q)}{q}\norm{m_2}.
+\]
+\end{lemma}
+
+\textbf{Proof.}
+By definition of plain addition,
+$\ctpadd=(x_0+\Delta m_2,x_1,\ldots,x_j)$. Hence, for some
+integer-coefficient polynomials $a,a'$,
+\begin{align*}
+\frac{t}{q}\ctpadd(s)
+&=\frac{t}{q}(x_0+\Delta m_2+x_1s+\cdots+x_js^j)\\
+&=\frac{\Delta t}{q}m_2+\frac{t}{q}(x_0+x_1s+\cdots+x_js^j)\\
+&=\frac{\Delta t}{q}m_2+\frac{t}{q}\ct(s)\\
+&=m_1+v+\frac{q-r_t(q)}{q}m_2+at\\
+&=m_1+m_2+v-\frac{r_t(q)}{q}m_2+at\\
+&=[m_1+m_2]_t+v-\frac{r_t(q)}{q}m_2+(a-a')t,
+\end{align*}
+where in the last line we used
+$[m_1+m_2]_t=m_1+m_2+a't$. Hence
+\[
+  \vpadd=v-\frac{r_t(q)}{q}m_2,
+\]
+and
+\[
+  \norm{\vpadd}\leq \norm{v}+\frac{r_t(q)}{q}\norm{m_2}.
+\]
+\hfill$\square$
+
+\section*{Negation}
+
+\begin{lemma}[Lemma 15]
+Let $\ct$ be a ciphertext encrypting $m$ with noise $v$, and let
+$\ctneg$ be its negation. The noise $\vneg$ in $\ctneg$ is given by
+$\vneg=-v$, and
+\[
+  \norm{\vneg}=\norm{v}.
+\]
+\end{lemma}
+
+\textbf{Proof.}
+If $\ct=(c_0,c_1,\ldots,c_k)$, then its negation is
+$\ctneg=(-c_0,-c_1,\ldots,-c_k)=-(c_0,c_1,\ldots,c_k)$.
+Thus
+\begin{align*}
+\frac{t}{q}\ctneg(s)
+&=-\frac{t}{q}\ct(s)\\
+&=-(m+v+at)\\
+&=-m+(-v)+(-a)t.
+\end{align*}
+Hence the noise $\vneg$ in $\ctneg$ is $-v$ and
+$\norm{\vneg}=\norm{v}$.
+\hfill$\square$
+
+\section*{Subtraction}
+
+Suppose $\ct_1$ and $\ct_2$ are two ciphertexts encrypting $m_1$ and
+$m_2$, and we want to compute a ciphertext $\ctsub$ encrypting
+$m_1-m_2$. We could first negate $\ct_2$ to obtain a ciphertext
+$\ct'_2$ that encrypts $-m_2$, and then perform an addition of
+$\ct_1$ and $\ct'_2$. By viewing subtraction in this way, the noise
+growth in subtraction is at most that for addition, since the noise
+does not change in norm in negation.
+
+\begin{lemma}[Lemma 16]
+Let $\ct_1$ and $\ct_2$ be two ciphertexts encrypting $m_1,m_2$,
+respectively, with noises $v_1,v_2$, respectively. The noise
+$\vsub$ in the result $\ctsub$ is bounded by
+\[
+  \norm{\vsub}\leq \norm{v_1}+\norm{v_2}.
+\]
+\end{lemma}
+
+\section*{Plain Subtraction}
+
+By the same argument as for subtraction, the noise growth in plain
+subtraction is at most that for plain addition.
+
+\begin{lemma}[Lemma 17]
+Let $\ct$ be a ciphertext encrypting $m_1$ with noise $v$, and let
+$m_2$ be a plaintext polynomial. Let $\ctpsub$ denote the ciphertext
+obtained by plain subtraction of $m_2$ from $\ct$. Then the noise
+$\vpsub$ in $\ctpsub$ is bounded by
+\[
+  \norm{\vpsub}\leq \norm{v}+\frac{r_t(q)}{q}\norm{m_2}.
+\]
+\end{lemma}
+
+\section*{Transcription Verification}
+
+The following checks were performed against the rendered PDF pages
+27--34 of the supplied SEAL 2.3.1 manual:
+
+\begin{enumerate}[leftmargin=2em]
+\item Lemma numbers and section order match the appendix: Lemmas 9--17
+      (Initial Noise, Addition, Multiplication, Relinearization,
+      Plain Multiplication, Plain Addition, Negation, Subtraction,
+      Plain Subtraction).
+\item The displayed bound in Lemma 9 matches
+      $\frac{r_t(q)}{q}\norm{m}+\frac{tB}{q}(2n+1)$.
+\item The three terms multiplying $\norm{v_2}$, $\norm{v_1}$, and
+      $\norm{v_1}\norm{v_2}$, plus the final rounding term in Lemma 11,
+      were checked against the printed statement and the last line
+      of its proof. In particular, the powers are $n^{j_1+1}$,
+      $n^{j_2+1}$, and $n^{j_1+j_2+1}$.
+\item The relinearization sum in Lemma 12 uses indices
+      $j=0,\ldots,M-N-1$ and $i=0,\ldots,\ell$, with
+      $e_{M-j,i}c_{M-j}^{(i)}$; its bound is
+      $\norm{v}+\frac{t}{q}(M-N)nB(\ell+1)w$.
+\item Lemmas 13--17 were checked against their displayed statements
+      and, where present, their proofs. Lemma 16 is a stated bound
+      supported by the preceding explanatory paragraph; Lemma 17
+      has no separate proof in the manual.
+\end{enumerate}
+
+\textbf{Transcription status:} the mathematical expressions above
+match the corresponding appendix statements in the supplied PDF.
+The original source's notation is retained; typographic layout and
+line breaks have been normalized for readable LaTeX.
+
+\end{document}

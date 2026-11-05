@@ -1,0 +1,80 @@
+{
+  "experiment": "experiment_2 (constrained vs unconstrained RL agent)",
+  "generated_utc": "2026-10-30T17:19:53+00:00",
+  "rollback": "disabled (raw Agent * columns at terminal step)",
+  "budgets": [
+    230,
+    236,
+    369,
+    9000000
+  ],
+  "unified_model": {
+    "source_path": "RL/fhe_rl/env_unified.py",
+    "env_class": "fhe_rl.env_unified.fheEnvUnified",
+    "constraint_metric": "noise",
+    "metric_unit": "bits",
+    "benchmark_source": "RL/fhe_rl/datasets/benchmarks.txt",
+    "benchmark_expressions_count": 69
+  },
+  "workbooks": {
+    "Unconstrained": {
+      "file": "original_unconstrained.xlsx",
+      "sha256": "2f1ceff528a666e6af75d439c19bcc061d6e20440cef3465963ce75540b0b9f8",
+      "rows": 276
+    },
+    "V4 Margin Barrier": {
+      "file": "original_v4_mb_B.xlsx",
+      "sha256": "a291a7cb0bbc31d042be21978de34c4a4147939a57eeb7b4259b09f3da2ae4a8",
+      "rows": 276
+    },
+    "V4 Noise Masking": {
+      "file": "original_v4_nmask_B.xlsx",
+      "sha256": "76d0b5a862ef4ca2a4db8108bc2cd861d411d42190842e39900f1395e76352ed",
+      "rows": 276
+    },
+    "V4 MB + FiLM": {
+      "file": "original_v4_mb_film_B.xlsx",
+      "sha256": "ac8d8ed6c3e80d919c37ff4e340f020e847657e1a53bb4a82ffa8f99109523a4",
+      "rows": 276
+    },
+    "V5 FOCOPS + NATO-SC": {
+      "file": "original_v5_focops_natosc.xlsx",
+      "sha256": "b5fe4c3b6617904c96cc70f667ab51f5cafe4db06c4738a697609c8a0b61c7a2",
+      "rows": 276
+    },
+    "V5 Lag-PID + NATO-SC": {
+      "file": "original_v5_lagpid_natosc.xlsx",
+      "sha256": "69b2c00926fdb88ce7c864de8c0d8ed50ee78da3659e3029efe1d47498ec2f4d",
+      "rows": 276
+    }
+  },
+  "environment": {
+    "python": "3.12.4",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "numpy": "2.1.1",
+    "pandas": "2.2.2",
+    "matplotlib": "3.9.2"
+  },
+  "outputs": [
+    "constrained_vs_unconstrained.csv",
+    "initial_status_and_violations.csv",
+    "violations_by_initial_status.csv",
+    "cr_within_budget.csv",
+    "ablation_cr.csv",
+    "ablation_violations.csv",
+    "agent_comparison/aggregate_results.csv",
+    "agent_comparison/per_expression_results.csv",
+    "initial_budget_partition/partition_summary.csv",
+    "initial_budget_partition/within_budget_violations.csv",
+    "initial_budget_partition/expression_budget_status.csv",
+    "within_budget_quality/aggregate_cost_reduction.csv",
+    "within_budget_quality/per_expression_results.csv",
+    "constraint_ablation/aggregate_ablation.csv",
+    "constraint_ablation/per_expression_results.csv",
+    "violation_rates.png",
+    "within_budget_cost_reduction.png",
+    "ablation_cost_reduction.png",
+    "exp2_results.md",
+    "run_metadata.json"
+  ]
+}

@@ -1,0 +1,3 @@
+Agent,B=230 before,B=230 after,B=369 before,B=369 after
+Unconstrained,47.5% (19/40),0.0% (0/40),23.3% (14/60),0.0% (0/60)
+Constrained (Lag-PID),52.5% (21/40),0.0% (0/40),18.3% (11/60),0.0% (0/60)

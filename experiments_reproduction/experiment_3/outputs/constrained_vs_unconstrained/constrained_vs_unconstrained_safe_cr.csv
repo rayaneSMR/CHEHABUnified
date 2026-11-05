@@ -1,0 +1,4 @@
+Agent,B=230 Safe CR%,B=236 Safe CR%,B=369 Safe CR%,Average Safe CR%
+Unconstrained + Safety,31.53,31.53,39.02,34.03
+Constrained (Lag-PID) + Safety,36.26,39.22,38.4,37.96
+Advantage (Constrained - Unconstrained),+4.73 pp,+7.69 pp,-0.62 pp,+3.93 pp
