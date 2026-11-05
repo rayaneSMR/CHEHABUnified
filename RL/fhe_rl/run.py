@@ -8,6 +8,91 @@ from .config import get_env_class, get_policy_class
 from stable_baselines3.common.monitor import Monitor
 
 
+def _write_compiler_output(expr: str, output_file: str):
+    """Rewritten expression + vector-size footer, the format the C++ compiler reads back."""
+    vec_s = calc_vec_sizes(parse_sexpr(expr))
+    footer = f"{vec_s[0]} {vec_s[0]} 1 0" if vec_s else "1 1 1 0"
+    with open(output_file, "w") as f:
+        f.write(expr + "\n" + footer + "\n")
+
+
+def run_agent_unified(
+    expressions_file: str,
+    embeddings_model,
+    model_filepath: str,
+    output_file: str,
+    budget: int,
+    train_budgets: list,
+    preference: list,
+    constraint_metric: str = "noise",
+    constraint_method: str = "nato_sc",
+    log_file: str = None,
+):
+    """Unified agent inside the C++ compiler (real compile + SEAL execution evaluation).
+
+    Runs the joint agent (ops + rotation rules) on the expression written by the
+    compiler, under `budget`, with preference `preference` = [w_ops, w_keys], then
+    applies the same safety rollback as `fhe_rl test` (best checkpoint within budget,
+    scored with the preference). Writes the safe expression back for the compiler,
+    and appends one JSON line with the RL-side numbers to `log_file` if given.
+    """
+    import json
+    import os
+    from pytrs import NoiseEstimator
+    from .memory import MemoryEstimator
+    from .test import _run_single_episode, _get_split_costs
+
+    expressions = load_expressions(expressions_file)
+    if not expressions:
+        print("No valid expressions found in the file.")
+        sys.exit(1)
+    expr = expressions[0]
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    rules_p = "rules.txt" if os.path.exists("rules.txt") else os.path.join(here, "rules.txt")
+    rot_p = "rotations_rules.txt" if os.path.exists("rotations_rules.txt") else os.path.join(here, "rotations_rules.txt")
+    rules_list = create_rules(rules_p, rot_p, rules_subset="all")
+    rules_list["END"] = None
+
+    EnvCls = get_env_class()
+    PolicyCls = get_policy_class()
+    env = DummyVecEnv([lambda: Monitor(EnvCls(
+        rules_list, [expr], max_positions=16, embeddings_model=embeddings_model,
+        budget_options=train_budgets, constraint_method=constraint_method,
+        constraint_metric=constraint_metric, verbose=False,
+    ))])
+    sys.modules["fhe_rl_new"] = importlib.import_module("fhe_rl")
+    model = PPO(policy=PolicyCls, env=env).load(model_filepath)
+    estimator = NoiseEstimator() if constraint_metric == "noise" else MemoryEstimator()
+
+    res = _run_single_episode(model, env, expr, budget, estimator, None, constraint_metric,
+                              preference_vector=preference)
+    safe_expr = res["safe_expr"]
+    _write_compiler_output(safe_expr, output_file)
+
+    ops0, keys0 = _get_split_costs(expr)
+    agent_ops, agent_keys = _get_split_costs(res["agent_final"]["expression"])
+    safe_ops, safe_keys = _get_split_costs(safe_expr)
+    record = {
+        "w_ops": preference[0], "w_keys": preference[1], "budget": budget,
+        "initial_ops": ops0, "initial_keys": keys0, "initial_noise_est": res["initial_noise"],
+        "agent_ops": agent_ops, "agent_keys": agent_keys,
+        "agent_noise_est": res["agent_final"]["noise"],
+        "agent_violated": res["agent_final"]["noise"] > budget,
+        "safe_ops": safe_ops, "safe_keys": safe_keys, "safe_noise_est": res["safe_noise"],
+        "safety_activated": res["safety_activated"], "best_valid_step": res["best_valid_step"],
+        "rl_steps": res["steps"], "rl_time_ms": round(res["elapsed_ms"], 1),
+        "input_expression": expr, "safe_expression": safe_expr,
+    }
+    print(f"[unified run] w={preference} budget={budget}: ops {ops0}->{safe_ops}, keys {keys0}->{safe_keys}, "
+          f"noise est {res['initial_noise']:.1f}->{res['safe_noise']:.1f}, "
+          f"rollback={'ON' if res['safety_activated'] else 'off'}", flush=True)
+    if log_file:
+        with open(log_file, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    return record
+
+
 def run_agent(expressions_file: str, embeddings_model, model_filepath: str, output_file: str, noise_budget: int = 1500, framework: str = "constrained"):
     start_time = time.perf_counter()
     expressions = load_expressions(expressions_file)

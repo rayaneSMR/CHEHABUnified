@@ -1580,50 +1580,27 @@ string process_composed_vectors(
 
       vector<string> vec_ops1 = {};
       vector<string> vec_ops2 = {};
-      if (
-        !verify_all_vec_elems_eq0(addition_elements) && !verify_all_vec_elems_eq0(substraction_elements) &&
-        !verify_all_vec_elems_eq0(multiplication_elements))
+      // Lanes with different top operations: process each group (+, -, *, negation)
+      // separately and add the results. Negations must be included here, otherwise a
+      // "( - x )" lane mixed with other operations is dropped (wrong outputs).
+      vector<const vector<string> *> groups = {};
+      for (const auto *g : {&addition_elements, &substraction_elements, &multiplication_elements, &negation_elements})
       {
-        return "( + " +
-               process_composed_vectors(
-                 addition_elements, dictionary, inputs_entries, inputs, inputs_types, slot_count) +
-               " ( + " +
-               process_composed_vectors(
-                 substraction_elements, dictionary, inputs_entries, inputs, inputs_types, slot_count) +
-               " " +
-               process_composed_vectors(
-                 multiplication_elements, dictionary, inputs_entries, inputs, inputs_types, slot_count) +
-               " ) )";
+        if (!verify_all_vec_elems_eq0(*g))
+          groups.push_back(g);
       }
-      else if (!verify_all_vec_elems_eq0(addition_elements) && !verify_all_vec_elems_eq0(substraction_elements))
+      if (groups.size() > 1)
       {
-        return "( + " +
-               process_composed_vectors(
-                 addition_elements, dictionary, inputs_entries, inputs, inputs_types, slot_count) +
-               " " +
-               process_composed_vectors(
-                 substraction_elements, dictionary, inputs_entries, inputs, inputs_types, slot_count) +
-               " )";
-      }
-      else if (!verify_all_vec_elems_eq0(substraction_elements) && !verify_all_vec_elems_eq0(multiplication_elements))
-      {
-        return "( + " +
-               process_composed_vectors(
-                 substraction_elements, dictionary, inputs_entries, inputs, inputs_types, slot_count) +
-               " " +
-               process_composed_vectors(
-                 multiplication_elements, dictionary, inputs_entries, inputs, inputs_types, slot_count) +
-               " )";
-      }
-      else if (!verify_all_vec_elems_eq0(addition_elements) && !verify_all_vec_elems_eq0(multiplication_elements))
-      {
-        return "( + " +
-               process_composed_vectors(
-                 addition_elements, dictionary, inputs_entries, inputs, inputs_types, slot_count) +
-               " " +
-               process_composed_vectors(
-                 multiplication_elements, dictionary, inputs_entries, inputs, inputs_types, slot_count) +
-               " )";
+        // ( + g1 ( + g2 ( ... gk ) ) ), same shape as before for the +, -, * groups
+        string res = process_composed_vectors(
+          *groups.back(), dictionary, inputs_entries, inputs, inputs_types, slot_count);
+        for (int gi = static_cast<int>(groups.size()) - 2; gi >= 0; gi--)
+        {
+          res = "( + " +
+                process_composed_vectors(*groups[gi], dictionary, inputs_entries, inputs, inputs_types, slot_count) +
+                " " + res + " )";
+        }
+        return res;
       }
       else if (!verify_all_vec_elems_eq0(addition_elements))
       {

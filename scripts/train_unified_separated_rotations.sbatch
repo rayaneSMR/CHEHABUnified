@@ -57,8 +57,8 @@ ALGO="lagrangian_pid"
 ENCODING="film"
 VARIANT="film_a"
 DATASET="./fhe_rl/datasets/final_llm_dataset_ops_preoptimized.txt"
-TIMESTEPS=5000000
-EVAL_FREQ=200000   # one eval (69 benchmarks x 10 prefs) takes ~52 min: 25 evals over 5M steps
+TIMESTEPS=4000000  # the joint model peaked at 4.0M steps
+EVAL_FREQ=200000   # one eval (69 benchmarks x 10 prefs) takes ~52 min: 20 evals over 4M steps
 NUM_ENVS=32
 # Keep 16384 samples per PPO update
 ROLLOUT_SIZE=16384

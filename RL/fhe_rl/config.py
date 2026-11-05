@@ -38,7 +38,8 @@ FHE_RL_DIR = Path(__file__).parent
 # Model paths configuration
 MODEL_PATHS = {
     "agent_model": FHE_RL_DIR / "trained_models" / "agent_dynamic_llm_data.zip",
-    "unified_agent_model": FHE_RL_DIR / "trained_models" / "model_jobid_lagrangian_pid_film_a.zip",
+    # Joint noise agent (job 18977759, best checkpoint at 4.0M steps)
+    "unified_agent_model": FHE_RL_DIR / "trained_models" / "unified_joint_noise_best_4.0M.zip",
     "mo_agent_model": FHE_RL_DIR / "trained_models" / "agent_pareto_2_full.zip",
     "gnn_agent_model": FHE_RL_DIR / "trained_models" / "agent_lppo_14848346.zip",
     "gnn_embeddings_model": FHE_RL_DIR / "trained_models" / "embeddings_gnn_model_epoch_100.pth",
