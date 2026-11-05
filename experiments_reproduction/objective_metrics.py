@@ -9,11 +9,16 @@ The unified agent optimises two objectives under a noise constraint:
 columns. This module reads those results and summarises the two objectives so the
 constraint ablations can report them alongside cost reduction and violations.
 
-Two result layouts are supported:
+Result layouts:
     legacy   hpc_results/rl_test_results/{original,threshold}_<tag>.xlsx
              (older test runs: one scalar cost, no exec/keys split, no preferences)
-    unified  results/ablation_unified/<agent>/eval_<jobid>/{original,threshold}.csv
-             (scripts/ablation_unified/eval_*.sbatch: exec/keys split, 10 preferences)
+    unified  results/ablation_unified/<agent>[_4pref]/eval_<jobid>/{original,threshold}.csv
+             (scripts/ablation_unified/eval_*.sbatch: exec/keys split; 10 preferences, or the
+             4 training preferences for the 4-preference ablation, eval_4pref.sbatch)
+    SEAL     results/ablation_unified/seal_4pref/{rollback,no_rollback}/raw/abl4_<agent>*.csv
+             (scripts/ablation_unified/seal_sweep_4pref.sbatch = unified_morl_experiments.py sweep
+             --experiments ABL4): measured circuit execution time and rotation-key size on the
+             47 C++ benchmark instances
 
 Rotation keys are reported as an absolute count: every benchmark expression starts
 scalar with 0 keys, so a "keys reduction (%)" is always <= 0 and not informative.
@@ -26,15 +31,23 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Display label -> (legacy file tag, unified ablation folder)
+# Display label -> (legacy file tag, 10-pref ablation folder, 4-pref ablation folder, SEAL sweep agent)
 AGENT_SOURCES = {
-    "Unconstrained": ("unconstrained", "unconstrained"),
-    "V4 Margin Barrier": ("v4_mb_B", "v4_mb"),
-    "V4 Noise Masking": ("v4_nmask_B", "v4_nmask"),
-    "V4 MB + FiLM": ("v4_mb_film_B", "v4_mb_film"),
-    "V5 FOCOPS + NATO-SC": ("v5_focops_natosc", "v5_focops"),
-    "V5 Lag-PID + NATO-SC": ("v5_lagpid_natosc", "ref_lagpid_natosc"),
+    "Unconstrained": ("unconstrained", "unconstrained", "unconstrained_4pref", "abl4_unconstrained"),
+    "V4 Margin Barrier": ("v4_mb_B", "v4_mb", "v4_mb_4pref", "abl4_v4_mb"),
+    "V4 Noise Masking": ("v4_nmask_B", "v4_nmask", "v4_nmask_4pref", "abl4_v4_nmask"),
+    "V4 MB + FiLM": ("v4_mb_film_B", "v4_mb_film", "v4_mb_film_4pref", "abl4_v4_mb_film"),
+    "V5 FOCOPS + NATO-SC": ("v5_focops_natosc", "v5_focops", "v5_focops_4pref", "abl4_v5_focops"),
+    "V5 Lag-PID + NATO-SC": ("v5_lagpid_natosc", "ref_lagpid_natosc", "v5_lagpid_4pref", "abl4_v5_lagpid"),
 }
+ABLATIONS = ("4pref", "10pref")
+
+
+def result_tag(label: str, source: str, ablation: str = "4pref") -> str:
+    legacy, d10, d4, _ = AGENT_SOURCES[label]
+    if source == "legacy":
+        return legacy
+    return d4 if ablation == "4pref" else d10
 
 # test_agent_v2 relabels its "RAM (MB)" columns to "Noise (bits)" for the noise metric
 NOISE_RENAMES = {
@@ -119,23 +132,177 @@ def read_results(path: Path) -> pd.DataFrame:
     return normalize(df)
 
 
-def resolve_source(source: str, legacy_dir: Path, unified_dir: Path) -> str:
+def resolve_source(source: str, legacy_dir: Path, unified_dir: Path, ablation: str = "4pref") -> str:
     """'auto' -> unified when every agent has unified results, else legacy."""
     if source != "auto":
         return source
     try:
-        for _, agent_dir in AGENT_SOURCES.values():
-            find_unified_file(unified_dir, agent_dir, "original")
+        for label in AGENT_SOURCES:
+            find_unified_file(unified_dir, result_tag(label, "unified", ablation), "original")
         return "unified"
     except SourceError:
         return "legacy"
 
 
-def agent_file(source: str, label: str, set_name: str, legacy_dir: Path, unified_dir: Path) -> Path:
-    tag, agent_dir = AGENT_SOURCES[label]
+def agent_file(source: str, label: str, set_name: str, legacy_dir: Path, unified_dir: Path,
+               ablation: str = "4pref") -> Path:
+    tag = result_tag(label, source, ablation)
     if source == "unified":
-        return find_unified_file(unified_dir, agent_dir, set_name)
+        return find_unified_file(unified_dir, tag, set_name)
     return legacy_dir / f"{set_name}_{tag}.xlsx"
+
+
+# --------------------------------------------------------------------------- #
+# Measured SEAL execution (unified_morl_experiments.py sweep --experiments ABL4)
+# --------------------------------------------------------------------------- #
+SEAL_TIME = "circuit_execution_time_s"
+SEAL_KEYS = "rotation_keys_size_mb"
+SEAL_NUMERIC = [SEAL_TIME, SEAL_KEYS, "galois_keys_generation_time_s", "total_execution_time_s",
+                "remaining_noise_budget", "measured_used_bits", "est_noise", "initial_est_noise",
+                "final_exec_cost", "final_keys_cost", "w_ops", "w_keys", "compile_time_s"]
+SEAL_BOOL = ["measured_violated", "est_violated", "rollback_used", "agent_violated"]
+TIME_LABEL = "Exec time (ms)"
+KEYSIZE_LABEL = "Rot. key size (MB)"
+
+
+def load_seal(mode_dir: Path, label: str) -> pd.DataFrame | None:
+    """All sweep rows of one agent (every shard) from <mode_dir>/raw/, or None when there are none."""
+    agent = AGENT_SOURCES[label][3]
+    raw = Path(mode_dir) / "raw"
+    files = sorted(raw.glob(f"{agent}.csv")) + sorted(raw.glob(f"{agent}.shard*.csv"))
+    if not files:
+        return None
+    df = pd.concat([pd.read_csv(f, dtype=str) for f in files], ignore_index=True)
+    df = df.drop_duplicates(["benchmark", "budget", "w_ops"], keep="last")
+    for c in SEAL_NUMERIC:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    for c in SEAL_BOOL:
+        if c in df.columns:
+            df[c] = df[c].astype(str).str.strip().str.lower().map({"true": True, "false": False})
+    df["budget"] = pd.to_numeric(df["budget"], errors="coerce").astype("Int64")
+    df["ok"] = df["status"].astype(str).eq("ok") & df[SEAL_TIME].notna() & df[SEAL_KEYS].notna()
+    return df
+
+
+def seal_subset(df: pd.DataFrame, budget: int, within_only: bool = False) -> pd.DataFrame:
+    sub = df[df["budget"] == budget]
+    if within_only:
+        sub = sub[sub["initial_est_noise"] <= budget]
+    return sub
+
+
+def seal_stats(sub: pd.DataFrame) -> dict:
+    ok = sub[sub["ok"]]
+    viol = ok["measured_violated"].dropna() if "measured_violated" in ok else pd.Series(dtype=bool)
+    return {
+        "points": len(sub), "ok": len(ok),
+        "time_ms": float(1000 * ok[SEAL_TIME].mean()) if len(ok) else np.nan,
+        "time_ms_median": float(1000 * ok[SEAL_TIME].median()) if len(ok) else np.nan,
+        "keys_mb": float(ok[SEAL_KEYS].mean()) if len(ok) else np.nan,
+        "meas_viol_pct": float(100 * viol.astype(bool).mean()) if len(viol) else np.nan,
+        "meas_viol": int(viol.astype(bool).sum()) if len(viol) else 0,
+    }
+
+
+def seal_time_ratio(sub: pd.DataFrame, ref: pd.DataFrame) -> float:
+    """Geometric mean over matched points (benchmark, budget, w_ops) of time / reference time."""
+    key = ["benchmark", "budget", "w_ops"]
+    a = sub[sub["ok"] & (sub[SEAL_TIME] > 0)][key + [SEAL_TIME]]
+    b = ref[ref["ok"] & (ref[SEAL_TIME] > 0)][key + [SEAL_TIME]]
+    m = a.merge(b, on=key, suffixes=("", "_ref"))
+    if m.empty:
+        return np.nan
+    return float(np.exp(np.log(m[SEAL_TIME] / m[f"{SEAL_TIME}_ref"]).mean()))
+
+
+def _nanmean(vals):
+    vals = [v for v in vals if not pd.isna(v)]
+    return float(np.mean(vals)) if vals else np.nan
+
+
+def seal_budget_table(frames: dict, labels: list, budgets: list, budget_label: dict,
+                      ref_label: str, within_only: bool = False) -> pd.DataFrame:
+    """Wide: per agent, measured exec time / key size / violation per budget, plus averages."""
+    rows = []
+    ref = frames.get(ref_label)
+    for label in labels:
+        df = frames.get(label)
+        if df is None:
+            continue
+        row = {"Agent": label}
+        t, k, v, logs = [], [], [], []
+        for b in budgets:
+            sub = seal_subset(df, b, within_only)
+            st = seal_stats(sub)
+            lb = budget_label[b]
+            row[f"B={lb} {TIME_LABEL}"] = st["time_ms"]
+            row[f"B={lb} {KEYSIZE_LABEL}"] = st["keys_mb"]
+            row[f"B={lb} measured viol. (%)"] = st["meas_viol_pct"]
+            row[f"B={lb} ok/points"] = f"{st['ok']}/{st['points']}"
+            t.append(st["time_ms"]); k.append(st["keys_mb"]); v.append(st["meas_viol_pct"])
+            if ref is not None:
+                ratio = seal_time_ratio(sub, seal_subset(ref, b, within_only))
+                if not pd.isna(ratio):
+                    logs.append(np.log(ratio))
+        row[f"Average {TIME_LABEL}"] = _nanmean(t)
+        row[f"Average {KEYSIZE_LABEL}"] = _nanmean(k)
+        row["Average measured viol. (%)"] = _nanmean(v)
+        row[f"Time vs {ref_label} (geo-mean)"] = float(np.exp(np.mean(logs))) if logs else np.nan
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _fmt(v, f):
+    return "n/a" if pd.isna(v) else format(v, f)
+
+
+def seal_compact(t: pd.DataFrame, budget_lbls: list, ref_label: str) -> pd.DataFrame:
+    """'time ms / key MB / measured viol %' cells for the markdown reports."""
+    rows = []
+    for _, r in t.iterrows():
+        row = {"Agent": r["Agent"]}
+        for b in budget_lbls:
+            row[f"B={b}"] = (f"{_fmt(r[f'B={b} {TIME_LABEL}'], '.1f')} ms / {_fmt(r[f'B={b} {KEYSIZE_LABEL}'], '.1f')} MB"
+                             f" / {_fmt(r[f'B={b} measured viol. (%)'], '.1f')}%")
+        row["Average"] = (f"{_fmt(r[f'Average {TIME_LABEL}'], '.1f')} ms / {_fmt(r[f'Average {KEYSIZE_LABEL}'], '.1f')} MB"
+                          f" / {_fmt(r['Average measured viol. (%)'], '.1f')}%")
+        ratio = r[f"Time vs {ref_label} (geo-mean)"]
+        row[f"Time vs {ref_label}"] = "" if pd.isna(ratio) else f"{ratio:.3f}x"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def seal_long_table(frames: dict, labels: list, budgets: list, budget_label: dict,
+                    within_only: bool = False) -> pd.DataFrame:
+    rows = []
+    for label in labels:
+        df = frames.get(label)
+        if df is None:
+            continue
+        for b in budgets:
+            st = seal_stats(seal_subset(df, b, within_only))
+            rows.append({"Agent": label, "Budget": budget_label[b], "Points": st["points"], "OK": st["ok"],
+                         f"Mean {TIME_LABEL}": st["time_ms"], f"Median {TIME_LABEL}": st["time_ms_median"],
+                         f"Mean {KEYSIZE_LABEL}": st["keys_mb"], "Measured violations": st["meas_viol"],
+                         "Measured violation rate (%)": st["meas_viol_pct"]})
+    return pd.DataFrame(rows)
+
+
+def seal_preference_table(frames: dict, labels: list, budgets: list, within_only: bool = False) -> pd.DataFrame:
+    """Per agent and preference, over all budgets: measured exec time and key size."""
+    rows = []
+    for label in labels:
+        df = frames.get(label)
+        if df is None:
+            continue
+        sub = pd.concat([seal_subset(df, b, within_only) for b in budgets])
+        for w, g in sorted(sub.groupby("w_ops"), key=lambda kv: -kv[0]):
+            st = seal_stats(g)
+            rows.append({"Agent": label, "Preference": pref_label(w, 1 - w), "OK points": st["ok"],
+                         f"Mean {TIME_LABEL}": st["time_ms"], f"Mean {KEYSIZE_LABEL}": st["keys_mb"],
+                         "Measured violation rate (%)": st["meas_viol_pct"]})
+    return pd.DataFrame(rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -247,16 +414,16 @@ def check_objectives(df: pd.DataFrame, label: str, exprs: list[str] | None = Non
 # --------------------------------------------------------------------------- #
 def plot_objectives_by_budget(table: pd.DataFrame, budgets_lbl: list, agent_col: str,
                               exec_fmt: str, keys_fmt: str, title: str, out_path: Path,
-                              highlight: str | None = None) -> Path:
-    """Two panels: exec-cost reduction and avg rotation keys, grouped by budget."""
+                              highlight: str | None = None,
+                              ylabels: tuple = ("Exec cost reduction (%)", "Avg rotation keys (unique)")) -> Path:
+    """Two panels grouped by budget: exec-cost reduction and avg rotation keys (or the given metrics)."""
     import matplotlib.pyplot as plt
     agents = table[agent_col].tolist()
     x = np.arange(len(budgets_lbl))
     width = 0.8 / max(len(agents), 1)
     cmap = plt.get_cmap("tab10")
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    for ax, fmt, ylabel in ((axes[0], exec_fmt, "Exec cost reduction (%)"),
-                            (axes[1], keys_fmt, "Avg rotation keys (unique)")):
+    for ax, fmt, ylabel in ((axes[0], exec_fmt, ylabels[0]), (axes[1], keys_fmt, ylabels[1])):
         for i, agent in enumerate(agents):
             row = table[table[agent_col] == agent].iloc[0]
             vals = [row[fmt.format(b=b)] for b in budgets_lbl]
