@@ -90,16 +90,16 @@ def run(cmd, cwd, env=None, timeout=None):
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 
-def compile_point(bench, bdir, slot, w_ops, env, timeout, poly_cfg=None):
+def compile_point(bench, bdir, slot, w_ops, env, timeout, poly_cfg=None, framework="unified"):
     """Compile once with the RL vectorizer. Returns (ok, compile_s, depth, mult_depth, output)."""
     if poly_cfg:
         regime, depth = poly_cfg
-        cmd = [f"./{bench}", str(depth), str(POLY_INSTANCE), regime, "1", "unified", "1", "0", "1", "0", "1", "0", str(w_ops)]
+        cmd = [f"./{bench}", str(depth), str(POLY_INSTANCE), regime, "1", framework, "1", "0", "1", "0", "1", "0", str(w_ops)]
     else:
         gen = bdir / f"generate_{bench}.py"
         if gen.is_file():
             run([sys.executable, gen.name, "--slot_count", str(slot)], cwd=bdir, timeout=600)
-        cmd = [f"./{bench}", "1", str(slot), "unified", "1", "0", "1", "1", "1", "0", str(w_ops)]
+        cmd = [f"./{bench}", "1", str(slot), framework, "1", "0", "1", "1", "1", "0", str(w_ops)]
     gen_cpp = bdir / "he" / "_gen_he_fhe.cpp"
     for f in (gen_cpp, bdir / "he" / "_gen_he_fhe.hpp"):   # never measure a stale circuit
         f.unlink(missing_ok=True)
@@ -221,7 +221,11 @@ def last_rl_record(log_path, n_before):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--model", required=True, help="unified joint agent .zip")
+    ap.add_argument("--model", required=True, help="unified joint agent .zip (ignored with --framework original)")
+    ap.add_argument("--framework", default=os.environ.get("FHE_E2E_FRAMEWORK", "unified"),
+                    choices=["unified", "original"],
+                    help="agent the compiler calls: the unified joint agent, or the original CHEHAB RL "
+                         "agent (agent_model in RL/fhe_rl/config.py). Default: $FHE_E2E_FRAMEWORK or unified")
     ap.add_argument("--budget", type=int, required=True, help="noise budget (bits)")
     ap.add_argument("--train_budgets", default="230,236,369,9000000")
     ap.add_argument("--benchmarks", default="all",
@@ -242,7 +246,7 @@ def main():
         sys.exit(f"Unknown benchmarks: {unknown}")
     prefs = ([[float(x) for x in p.split(",")] for p in args.prefs.split(";")] if args.prefs else PREFS)
     model = str(Path(args.model).resolve())
-    if not Path(model).is_file():
+    if args.framework == "unified" and not Path(model).is_file():
         sys.exit(f"Model not found: {model}")
 
     tag = f"b{args.budget}_{os.environ.get('SLURM_JOB_ID', 'local')}"
@@ -278,7 +282,7 @@ def main():
             sizes = [int(s) for s in args.slots.split(",")] if args.slots else SUITE[bench]
             points += [(bench, s, None) for s in sizes]
 
-    log(f"Model {model} | budget {args.budget} | {len(points)} benchmark configs x {len(prefs)} preferences")
+    log(f"Framework {args.framework} | Model {model if args.framework == 'unified' else 'agent_model (config.py)'} | budget {args.budget} | {len(points)} benchmark configs x {len(prefs)} preferences")
     log(f"Work dir {work} | output {out}")
     t_start = time.perf_counter()
     for bench, slot, poly_cfg in points:
@@ -289,7 +293,7 @@ def main():
             n_before = len(rl_log.read_text().splitlines()) if rl_log.exists() else 0
             try:
                 ok, compile_s, depth, mdepth, cout = compile_point(
-                    bench, bdir, slot, w_ops, env, args.compile_timeout, poly_cfg)
+                    bench, bdir, slot, w_ops, env, args.compile_timeout, poly_cfg, args.framework)
             except subprocess.TimeoutExpired:
                 ok, cout = False, "compile-timeout"
             row.update(last_rl_record(rl_log, n_before))

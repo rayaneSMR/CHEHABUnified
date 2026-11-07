@@ -16,7 +16,9 @@ def run_agent(expressions_file: str,embeddings_model, model_filepath: str,output
         sys.exit(1)
         return
     print(expressions)
-    rules_list = create_rules("rules.txt")
+    # Only rules.txt: the original agent was trained on its 84 rules (+ END) x 16 positions
+    # = 1360 actions, without the rotation rules that create_rules adds by default.
+    rules_list = create_rules("rules.txt", rules_subset="ops")
     rules_list["END"] = None
     results = []
     max_positions = 16

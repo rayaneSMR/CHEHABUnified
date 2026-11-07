@@ -11,6 +11,11 @@
 # Usually submitted by scripts/launch_unified_e2e.sh. Needs a built clone
 # (bash scripts/build_e2e_benchmarks.sh) and SEAL 4.1.
 # Output: RL/test_results/e2e_<benchmarks>_b<budget>_<jobid>.csv
+#
+# Original CHEHAB RL agent instead of the unified one (single objective, no budget, no
+# preference; agent_model in RL/fhe_rl/config.py): set FHE_E2E_FRAMEWORK=original. MODEL,
+# BUDGET and the preference are then ignored by the agent; pass one preference to run each
+# benchmark once. Output: RL/test_results/e2e_original_<benchmarks>_<jobid>.csv
 
 #SBATCH -p compute
 #SBATCH --mem 32GB
@@ -64,12 +69,18 @@ fi
 
 TAG="$(echo "$BENCHMARKS" | tr ',' '-')"
 JOB="${SLURM_JOB_ID:-local}"
-OUT="RL/test_results/e2e_${TAG}_b${BUDGET}_${JOB}.csv"
+FRAMEWORK="${FHE_E2E_FRAMEWORK:-unified}"
+if [ "$FRAMEWORK" = "original" ]; then
+    OUT="RL/test_results/e2e_original_${TAG}_${JOB}.csv"
+else
+    OUT="RL/test_results/e2e_${TAG}_b${BUDGET}_${JOB}.csv"
+fi
 PREF_ARGS=()
 [ -n "$PREFERENCES" ] && PREF_ARGS=(--prefs "$PREFERENCES")
 
 echo "════════════════════════════════════════════════════════════"
 echo "  UNIFIED AGENT: REAL COMPILE + SEAL EXECUTION"
+echo "  Framework:   $FRAMEWORK"
 echo "  Model:       $MODEL"
 echo "  Benchmarks:  $BENCHMARKS"
 echo "  Budget:      $BUDGET bits"
@@ -80,6 +91,7 @@ echo "  Output:      $OUT"
 echo "════════════════════════════════════════════════════════════"
 
 python -u scripts/run_benchmarks_unified.py \
+    --framework "$FRAMEWORK" \
     --model "$MODEL" \
     --budget "$BUDGET" \
     --benchmarks "$BENCHMARKS" \
