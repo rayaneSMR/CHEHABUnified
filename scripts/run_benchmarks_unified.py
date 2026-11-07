@@ -53,7 +53,8 @@ EXEC_METRICS = {   # line prefix printed by the generated main.cpp -> CSV column
 }
 RL_FIELDS = ["initial_ops", "initial_keys", "initial_noise_est", "agent_ops", "agent_keys",
              "agent_noise_est", "agent_violated", "safe_ops", "safe_keys", "safe_noise_est",
-             "safety_activated", "best_valid_step", "rl_steps", "rl_time_ms"]
+             "safety_activated", "best_valid_step", "rl_steps", "rl_time_ms",
+             "certified", "certified_remaining_bits"]
 COLUMNS = (["benchmark", "slot_count", "w_ops", "w_keys", "budget", "status"] + OPERATIONS
            + ["Depth", "Multiplicative Depth", "compile_time (s)"] + list(EXEC_METRICS.values())
            + ["exec_runs", "outputs_match"] + RL_FIELDS)

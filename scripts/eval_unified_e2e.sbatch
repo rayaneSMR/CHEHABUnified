@@ -67,6 +67,18 @@ if [ -z "${SEAL_DIR:-}" ]; then
     exit 1
 fi
 
+# SEAL noise-bound certificate for the agent's rollback (read by `fhe_rl run` through the
+# compiler's subprocess). Same parameters as the generated SEAL programs:
+#   N = 16384, t = PlainModulus::Batching(16384, 20) = 786433, q = BFVDefault(16384).
+export FHE_BFV_NOISE_BOUND_EXECUTABLE="${FHE_BFV_NOISE_BOUND_EXECUTABLE:-$PROJ_ROOT/build_bfv_noise/bfv_noise_bound_cli}"
+export FHE_BFV_POLY_MODULUS_DEGREE=16384
+export FHE_BFV_PLAIN_MODULUS=786433
+export FHE_BFV_COEFF_MODULUS_BITS=48,48,48,49,49,49,49,49,49
+if [ "${FHE_E2E_FRAMEWORK:-unified}" != "original" ] && [ ! -x "$FHE_BFV_NOISE_BOUND_EXECUTABLE" ]; then
+    echo "ERROR: noise-bound certificate not found: $FHE_BFV_NOISE_BOUND_EXECUTABLE (run scripts/build_bfv_noise_cli.sh)"
+    exit 1
+fi
+
 TAG="$(echo "$BENCHMARKS" | tr ',' '-')"
 JOB="${SLURM_JOB_ID:-local}"
 FRAMEWORK="${FHE_E2E_FRAMEWORK:-unified}"
@@ -87,6 +99,7 @@ echo "  Budget:      $BUDGET bits"
 echo "  Python:      $PYTHON"
 echo "  C++:         $FHE_E2E_CXX"
 echo "  SEAL:        $SEAL_DIR"
+echo "  Certificate: $FHE_BFV_NOISE_BOUND_EXECUTABLE"
 echo "  Output:      $OUT"
 echo "════════════════════════════════════════════════════════════"
 

@@ -65,7 +65,14 @@ def run_agent_unified(
     model = PPO(policy=PolicyCls, env=env).load(model_filepath)
     estimator = NoiseEstimator() if constraint_metric == "noise" else MemoryEstimator()
 
-    res = _run_single_episode(model, env, expr, budget, estimator, None, constraint_metric,
+    # SEAL noise-bound certificate for the rollback, as in `fhe_rl test`: the returned program
+    # must be certified decryptable. Required for the noise constraint (fails if not configured).
+    verifier = None
+    if constraint_metric == "noise":
+        from .seal_noise_bound import BFVNoiseBoundVerifier
+        verifier = BFVNoiseBoundVerifier.from_environment()
+
+    res = _run_single_episode(model, env, expr, budget, estimator, verifier, constraint_metric,
                               preference_vector=preference)
     safe_expr = res["safe_expr"]
     _write_compiler_output(safe_expr, output_file)
@@ -82,11 +89,14 @@ def run_agent_unified(
         "safe_ops": safe_ops, "safe_keys": safe_keys, "safe_noise_est": res["safe_noise"],
         "safety_activated": res["safety_activated"], "best_valid_step": res["best_valid_step"],
         "rl_steps": res["steps"], "rl_time_ms": round(res["elapsed_ms"], 1),
+        "certified": res["certified"],
+        "certified_remaining_bits": (res["certificate"].remaining_noise_budget_bits
+                                     if res["certificate"] is not None else None),
         "input_expression": expr, "safe_expression": safe_expr,
     }
     print(f"[unified run] w={preference} budget={budget}: ops {ops0}->{safe_ops}, keys {keys0}->{safe_keys}, "
           f"noise est {res['initial_noise']:.1f}->{res['safe_noise']:.1f}, "
-          f"rollback={'ON' if res['safety_activated'] else 'off'}", flush=True)
+          f"rollback={'ON' if res['safety_activated'] else 'off'}, certified={res['certified']}", flush=True)
     if log_file:
         with open(log_file, "a") as f:
             f.write(json.dumps(record) + "\n")
