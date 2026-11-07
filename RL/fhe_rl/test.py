@@ -280,9 +280,12 @@ def _run_single_episode(
     bfv_noise_bound_verifier=None,
     constraint_metric: str = "mem",
     preference_vector=None,
+    agent_budget=None,
 ):
+    # agent_budget: budget given to the agent, when it differs from the one the rollback
+    # checks (e.g. 9000000 for an unconstrained run, rolled back at the real budget).
     t0 = time.perf_counter()
-    opts = {"budget": budget, "expression": expr_str}
+    opts = {"budget": budget if agent_budget is None else agent_budget, "expression": expr_str}
     if preference_vector is not None:
         opts["preference_vector"] = preference_vector
     env.set_options(opts)
@@ -470,6 +473,7 @@ def test_agent_v2(
     pipeline: str = "joint",
     model_stage2_filepath: str = None,
     pref_list: list = None,
+    agent_budget=None,
 ):
     """Test with trajectory checkpointing, safety rollback, and feasible/infeasible split.
 
@@ -481,6 +485,9 @@ def test_agent_v2(
     training preferences). Joint: the agent runs at w. Separated: Stage 1 runs at [1, 0]
     (single-objective ops agent), then Stage 2 runs at w. The constrained framework has no
     preference and runs once.
+
+    agent_budget: if set, the agent runs with this budget (e.g. 9000000, unconstrained) while
+    the rollback and the violation columns still use each test budget.
     """
     if get_framework() == "constrained":
         pref_list = [None]
@@ -602,7 +609,8 @@ def test_agent_v2(
 
     for budget in test_budgets:
         print(f"\n{'='*60}")
-        print(f"  Testing ({pipeline}) with budget = {budget}")
+        print(f"  Testing ({pipeline}) with budget = {budget}"
+              + (f" (agent runs with budget {agent_budget})" if agent_budget is not None else ""))
         print(f"{'='*60}")
 
         total_exprs = len(expressions)
@@ -618,12 +626,12 @@ def test_agent_v2(
 
             if pipeline == "separated":
                 print(f"  [Budget {budget}] [{expr_idx+1}/{total_exprs}] '{expr_name}' ({w_tag}) -> Stage 1 (Ops, w=[1.0, 0.0])...", flush=True)
-                res1 = _run_single_episode(model_ops, env_ops, test_expr, budget, noise_estimator, bfv_noise_bound_verifier, constraint_metric, preference_vector=[1.0, 0.0])
+                res1 = _run_single_episode(model_ops, env_ops, test_expr, budget, noise_estimator, bfv_noise_bound_verifier, constraint_metric, preference_vector=[1.0, 0.0], agent_budget=agent_budget)
                 stage1_safe_expr = res1["safe_expr"]
                 stage1_ops, stage1_keys = _get_split_costs(stage1_safe_expr)
 
                 print(f"  [Budget {budget}] [{expr_idx+1}/{total_exprs}] '{expr_name}' -> Stage 2 (Rotations, {w_tag})...", flush=True)
-                res2 = _run_single_episode(model_rot, env_rot, stage1_safe_expr, budget, noise_estimator, bfv_noise_bound_verifier, constraint_metric, preference_vector=w)
+                res2 = _run_single_episode(model_rot, env_rot, stage1_safe_expr, budget, noise_estimator, bfv_noise_bound_verifier, constraint_metric, preference_vector=w, agent_budget=agent_budget)
                 final_safe_expr = res2["safe_expr"]
                 final_ops, final_keys = _get_split_costs(final_safe_expr)
 
@@ -697,7 +705,7 @@ def test_agent_v2(
                 })
             else:
                 print(f"  [Budget {budget}] [{expr_idx+1}/{total_exprs}] Evaluating '{expr_name}' ({w_tag})...", flush=True)
-                res = _run_single_episode(model, env, test_expr, budget, noise_estimator, bfv_noise_bound_verifier, constraint_metric, preference_vector=w)
+                res = _run_single_episode(model, env, test_expr, budget, noise_estimator, bfv_noise_bound_verifier, constraint_metric, preference_vector=w, agent_budget=agent_budget)
                 initial_cost = res["initial_cost"]
                 agent_final = res["agent_final"]
                 safe_expr = res["safe_expr"]

@@ -366,6 +366,13 @@ def parse_arguments(args=None):
         "--v2", action="store_true", default=False, help="Use test_agent_v2"
     )
     test_parser.add_argument(
+        "--agent_budget",
+        type=float,
+        default=None,
+        help="(--v2) Budget given to the agent, when it differs from the test budget. "
+             "E.g. 9000000 runs the agent unconstrained; the rollback still uses --budgets.",
+    )
+    test_parser.add_argument(
         "--test_mode",
         type=str,
         default="v2",
@@ -646,6 +653,7 @@ def main(args=None):
                     [[float(x) for x in p.split(",")] for p in parsed_args.preferences.split(";")]
                     if getattr(parsed_args, "preferences", None) else None
                 ),
+                agent_budget=getattr(parsed_args, "agent_budget", None),
             )
         else:
             test_agent(

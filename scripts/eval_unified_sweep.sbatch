@@ -2,11 +2,15 @@
 # One evaluation job of the unified joint agent: one dataset x one budget,
 # evaluated at every preference (default: the 10 training preferences [1,0] ... [0.1,0.9]).
 #
-#   sbatch scripts/eval_unified_sweep.sbatch DATASET BUDGET MODEL [PREFERENCES]
+#   sbatch scripts/eval_unified_sweep.sbatch DATASET BUDGET MODEL [PREFERENCES] [AGENT_BUDGET]
 #     DATASET      file name in RL/fhe_rl/datasets/ (e.g. benchmarks.txt)
 #     BUDGET       noise budget in bits to test on (230, 236, 369 or 9000000)
 #     MODEL        trained joint model .zip (absolute path)
-#     PREFERENCES  optional, "w_ops,w_keys;w_ops,w_keys;..." (e.g. "0.9,0.1;0.5,0.5")
+#     PREFERENCES  optional, "w_ops,w_keys;w_ops,w_keys;..." (e.g. "0.9,0.1;0.5,0.5");
+#                  pass "" to keep the default
+#     AGENT_BUDGET optional, budget given to the agent instead of BUDGET. 9000000 runs it
+#                  unconstrained; the rollback and violation columns still use BUDGET.
+#                  The output is then named eval_<dataset>_b<BUDGET>_agent<AGENT_BUDGET>_<jobid>.
 #
 # Usually submitted by scripts/launch_unified_eval.sh (one job per dataset x budget).
 # Output: RL/test_results/eval_<dataset>_b<budget>_<jobid>.xlsx (+ .csv)
@@ -35,6 +39,7 @@ DATASET="${1:?usage: sbatch eval_unified_sweep.sbatch DATASET BUDGET MODEL [PREF
 BUDGET="${2:?missing BUDGET}"
 MODEL="${3:?missing MODEL}"
 PREFERENCES="${4:-}"
+AGENT_BUDGET="${5:-}"
 
 # Run in the folder the job was submitted from (keep evaluations in their own clone).
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}/RL" ]; then
@@ -49,7 +54,8 @@ mkdir -p "$PROJ_ROOT/RL/test_results" "$PROJ_ROOT/logs"
 TRAIN_BUDGETS="230,236,369,9000000"   # budgets the joint agent was trained on
 DATASET_FILE="./fhe_rl/datasets/${DATASET}"
 TAG="${DATASET%.txt}"
-OUT="$PROJ_ROOT/RL/test_results/eval_${TAG}_b${BUDGET}_${SLURM_JOB_ID:-local}.xlsx"
+AGENT_TAG="${AGENT_BUDGET:+_agent${AGENT_BUDGET}}"
+OUT="$PROJ_ROOT/RL/test_results/eval_${TAG}_b${BUDGET}${AGENT_TAG}_${SLURM_JOB_ID:-local}.xlsx"
 
 # BFV rollback certificate: parameters of CHEHAB's generated SEAL programs
 #   N = 16384, t = PlainModulus::Batching(16384, 20) = 786433, q = BFVDefault(16384).
@@ -70,12 +76,16 @@ PREF_ARGS=()
 if [ -n "$PREFERENCES" ]; then
     PREF_ARGS=(--preferences "$PREFERENCES")
 fi
+if [ -n "$AGENT_BUDGET" ]; then
+    PREF_ARGS+=(--agent_budget "$AGENT_BUDGET")
+fi
 
 echo "════════════════════════════════════════════════════════════"
 echo "  UNIFIED JOINT AGENT EVALUATION"
 echo "  Model:        $MODEL"
 echo "  Dataset:      $DATASET_FILE ($(wc -l < "$DATASET_FILE") expressions)"
 echo "  Budget:       $BUDGET bits   (trained on $TRAIN_BUDGETS)"
+echo "  Agent budget: ${AGENT_BUDGET:-$BUDGET} bits"
 echo "  Preferences:  ${PREFERENCES:-10 training preferences [1,0] ... [0.1,0.9]}"
 echo "  Certificate:  $FHE_BFV_NOISE_BOUND_EXECUTABLE"
 echo "  Output:       $OUT"
