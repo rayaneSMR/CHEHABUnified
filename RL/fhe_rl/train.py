@@ -70,6 +70,8 @@ def train_agent(
     embedder_type: str = "gnn",
     n_steps: int = 2048,
     rules_subset: str = "all",
+    eval_benchmarks: str = None,
+    eval_prefs: str = None,
 ):
     set_random_seed(seed)
     
@@ -104,6 +106,11 @@ def train_agent(
     if not os.path.exists(benchmarks_file):
         benchmarks_file = os.path.join(os.path.dirname(__file__), "datasets", "benchmarks.txt")
     benchmarks = load_expressions(benchmarks_file)
+    # Optional smaller evaluation: a subset of benchmarks.txt (0-based line indices, e.g. "14")
+    if eval_benchmarks:
+        idx = [int(i) for i in str(eval_benchmarks).split(",")]
+        benchmarks = [benchmarks[i] for i in idx]
+        print(f"[Eval] Using {len(benchmarks)} benchmark(s) of {benchmarks_file}: lines {idx}")
 
     if not os.path.exists(expressions_file):
         alt_expr = os.path.join(os.path.dirname(__file__), "datasets", os.path.basename(expressions_file))
@@ -344,9 +351,15 @@ def train_agent(
     except Exception:
         pass
 
+    # Optional fewer preferences for the evaluation only (training keeps pref_list)
+    eval_pref_list = pref_list
+    if eval_prefs:
+        eval_pref_list = [[float(x) for x in p.split(",")] for p in eval_prefs.split(";")]
+        print(f"[Eval] Evaluating at {len(eval_pref_list)} preference(s): {eval_pref_list}")
+
     pareto_eval_cb = ParetoEvalCallback(
         val_env, 
-        pref_list=pref_list,
+        pref_list=eval_pref_list,
         best_model_save_path=f"./eval/best_model_{run_name}", 
         log_path=tensorboard_log_dir, 
         eval_freq=eval_freq,

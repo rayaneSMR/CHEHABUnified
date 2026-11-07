@@ -238,6 +238,18 @@ def parse_arguments(args=None):
         help="Start fresh training from step 0 (ignores existing checkpoints; default is auto-resume)",
     )
     train_parser.add_argument(
+        "--eval_benchmarks",
+        type=str,
+        default=None,
+        help="Evaluate on a subset of benchmarks.txt: comma-separated 0-based line indices (e.g. '14'). Default: all",
+    )
+    train_parser.add_argument(
+        "--eval_prefs",
+        type=str,
+        default=None,
+        help="Preferences for the evaluation only, as 'w_ops,w_keys;...' (e.g. '1,0;0.5,0.5;0.1,0.9'). Default: the training preferences",
+    )
+    train_parser.add_argument(
         "--n_pref",
         type=int,
         default=11,
@@ -577,6 +589,8 @@ def main(args=None):
                 n_pref=parsed_args.n_pref,
                 n_steps=parsed_args.n_steps,
                 rules_subset=getattr(parsed_args, "rules_subset", "all"),
+                eval_benchmarks=getattr(parsed_args, "eval_benchmarks", None),
+                eval_prefs=getattr(parsed_args, "eval_prefs", None),
             )
 
     # ─────────────────────────────── TEST ─────────────────────────────
