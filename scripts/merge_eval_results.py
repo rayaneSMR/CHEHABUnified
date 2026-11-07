@@ -14,7 +14,10 @@ from pathlib import Path
 
 import pandas as pd
 
-PATTERN = re.compile(r"^eval_(?P<tag>.+)_b(?P<budget>\d+)_(?P<job>[^_]+)\.xlsx$")
+# Optional _agent<budget>: runs where the agent got another budget than the test budget
+# (e.g. eval_threshold_benchmarks_b230_agent9000000_<job>.xlsx, the unconstrained baseline).
+# They are merged into their own file, eval_<dataset>_agent<budget>_ALL.xlsx.
+PATTERN = re.compile(r"^eval_(?P<tag>.+)_b(?P<budget>\d+)(?P<agent>_agent\d+)?_(?P<job>[^_]+)\.xlsx$")
 SHEETS = ["all_results", "summary_per_budget", "summary_per_pref", "front_metrics",
           "front_summary", "feasible_summary", "infeasible_summary"]
 
@@ -30,7 +33,7 @@ def main(folder):
         m = PATTERN.match(path.name)
         if not m or path.name.endswith("_ALL.xlsx"):
             continue
-        key = (m["tag"], int(m["budget"]))
+        key = (m["tag"] + (m["agent"] or ""), int(m["budget"]))
         if key not in newest or _job_key(m["job"]) > _job_key(newest[key][0]):
             newest[key] = (m["job"], path)
 
@@ -126,7 +129,7 @@ def e2e_front_metrics(ok):
 
 def merge_e2e(folder):
     """Real compile + SEAL runs (e2e_<benchmarks>_b<budget>_<jobid>.csv) -> e2e_ALL.xlsx."""
-    files = sorted(Path(folder).glob("e2e_*_b*_*.csv"))
+    files = sorted(f for f in Path(folder).glob("e2e_*_b*_*.csv") if not f.name.startswith("e2e_original_"))
     if not files:
         return
     df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
@@ -164,7 +167,33 @@ def merge_e2e(folder):
     print(f"{out}  <-  {len(files)} real compile + SEAL files, {len(df)} runs ({len(ok)} ok)")
 
 
+def merge_e2e_original(folder):
+    """Original CHEHAB RL agent (e2e_original_<benchmarks>_<jobid>.csv) -> e2e_original_ALL.xlsx.
+    One run per benchmark; if a benchmark was rerun, the newest job is kept."""
+    files = sorted(Path(folder).glob("e2e_original_*.csv"),
+                   key=lambda f: _job_key(f.stem.rsplit("_", 1)[-1]))
+    if not files:
+        return
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    df = df.drop_duplicates(["benchmark"], keep="last").sort_values("benchmark")
+    ok = df[df["status"] == "ok"]
+    summary = pd.DataFrame([{
+        "Benchmarks": len(df),
+        "OK": len(ok),
+        "Outputs Correct": int((ok["outputs_match"] == True).sum()),   # noqa: E712
+        "Outputs Wrong": int((ok["outputs_match"] == False).sum()),    # noqa: E712
+        "No Reference": int(ok["outputs_match"].isna().sum()),
+        "Avg circuit_execution_time (s)": round(pd.to_numeric(ok["circuit_execution_time (s)"], errors="coerce").mean(), 4),
+    }])
+    out = Path(folder) / "e2e_original_ALL.xlsx"
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="all_runs", index=False)
+        summary.to_excel(writer, sheet_name="summary", index=False)
+    print(f"{out}  <-  {len(files)} files, {len(df)} benchmarks ({len(ok)} ok)")
+
+
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "RL/test_results"
     main(target)
     merge_e2e(target)
+    merge_e2e_original(target)
