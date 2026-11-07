@@ -1,4 +1,6 @@
 #include "fheco/dsl/compiler_helper_functions.hpp"
+#include <algorithm>
+#include <cctype>
 #include <stdexcept>
 
 using namespace std;
@@ -44,8 +46,13 @@ std::vector<std::string> process_vectorized_code(const string& content) {
     return tokens;
 }
 
+// An integer constant such as 3 or -1 (not a parenthesized expression like "( - 0 )").
 bool is_literal(const std::string& token) {
-    return std::none_of(token.begin(), token.end(), [](unsigned char c) { return std::isalpha(c); });
+    if (token.empty())
+      return true;
+    size_t start = (!token.empty() && token[0] == '-') ? 1 : 0;
+    return token.size() > start
+      && std::all_of(token.begin() + start, token.end(), [](unsigned char c) { return std::isdigit(c); });
 }
 
 bool verify_all_vec_elems_eq0(const vector<string>& elems){
@@ -303,7 +310,7 @@ string constant_folding(queue<string> &tokens){
               if(operationString=="+"){
                 return operand1;
               }else if(operationString=="-"){
-                return "( "+operationString+" "+operand1+" )";
+                return operand1;
               }else if(operationString=="*"){
                 return std::to_string(res);
               }
@@ -327,6 +334,9 @@ string constant_folding(queue<string> &tokens){
             return "( "+operationString+" "+operand1+" "+operand2+" )" ;
         }
       }else{
+        if(operationString=="-" && is_literal(operand1)){
+          return std::to_string(-stoi(operand1));
+        }
         return "( "+operationString+" "+operand1+" )" ;
       }
     }
