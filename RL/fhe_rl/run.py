@@ -27,6 +27,7 @@ def run_agent_unified(
     constraint_metric: str = "noise",
     constraint_method: str = "nato_sc",
     log_file: str = None,
+    model_stage2_filepath: str = None,
 ):
     """Unified agent inside the C++ compiler (real compile + SEAL execution evaluation).
 
@@ -35,6 +36,10 @@ def run_agent_unified(
     applies the same safety rollback as `fhe_rl test` (best checkpoint within budget,
     scored with the preference). Writes the safe expression back for the compiler,
     and appends one JSON line with the RL-side numbers to `log_file` if given.
+
+    Separated pipeline (model_stage2_filepath given), as in `fhe_rl test --pipeline separated`:
+    Stage 1 (model_filepath, ops rules) runs at w = [1, 0], then Stage 2 (model_stage2_filepath,
+    rotation rules) runs at `preference` on the Stage 1 output. Each stage has its own rollback.
     """
     import json
     import os
@@ -51,18 +56,26 @@ def run_agent_unified(
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     rules_p = "rules.txt" if os.path.exists("rules.txt") else os.path.join(here, "rules.txt")
     rot_p = "rotations_rules.txt" if os.path.exists("rotations_rules.txt") else os.path.join(here, "rotations_rules.txt")
-    rules_list = create_rules(rules_p, rot_p, rules_subset="all")
-    rules_list["END"] = None
-
     EnvCls = get_env_class()
     PolicyCls = get_policy_class()
-    env = DummyVecEnv([lambda: Monitor(EnvCls(
-        rules_list, [expr], max_positions=16, embeddings_model=embeddings_model,
-        budget_options=train_budgets, constraint_method=constraint_method,
-        constraint_metric=constraint_metric, verbose=False,
-    ))])
     sys.modules["fhe_rl_new"] = importlib.import_module("fhe_rl")
-    model = PPO(policy=PolicyCls, env=env).load(model_filepath)
+
+    def _load(subset, path):
+        rules_list = create_rules(rules_p, rot_p, rules_subset=subset)
+        rules_list["END"] = None
+        env = DummyVecEnv([lambda: Monitor(EnvCls(
+            rules_list, [expr], max_positions=16, embeddings_model=embeddings_model,
+            budget_options=train_budgets, constraint_method=constraint_method,
+            constraint_metric=constraint_metric, verbose=False,
+        ))])
+        return PPO(policy=PolicyCls, env=env).load(path), env
+
+    separated = bool(model_stage2_filepath)
+    if separated:
+        model, env = _load("ops", model_filepath)
+        model_rot, env_rot = _load("rotations", model_stage2_filepath)
+    else:
+        model, env = _load("all", model_filepath)
     estimator = NoiseEstimator() if constraint_metric == "noise" else MemoryEstimator()
 
     # SEAL noise-bound certificate for the rollback, as in `fhe_rl test`: the returned program
@@ -72,8 +85,19 @@ def run_agent_unified(
         from .seal_noise_bound import BFVNoiseBoundVerifier
         verifier = BFVNoiseBoundVerifier.from_environment()
 
-    res = _run_single_episode(model, env, expr, budget, estimator, verifier, constraint_metric,
-                              preference_vector=preference)
+    if separated:
+        res1 = _run_single_episode(model, env, expr, budget, estimator, verifier, constraint_metric,
+                                   preference_vector=[1.0, 0.0])
+        res = _run_single_episode(model_rot, env_rot, res1["safe_expr"], budget, estimator, verifier,
+                                  constraint_metric, preference_vector=preference)
+        # Report the whole pipeline: input of Stage 1 -> output of Stage 2
+        res["initial_noise"] = res1["initial_noise"]
+        res["safety_activated"] = res1["safety_activated"] or res["safety_activated"]
+        res["steps"] = res1["steps"] + res["steps"]
+        res["elapsed_ms"] = res1["elapsed_ms"] + res["elapsed_ms"]
+    else:
+        res = _run_single_episode(model, env, expr, budget, estimator, verifier, constraint_metric,
+                                  preference_vector=preference)
     safe_expr = res["safe_expr"]
     _write_compiler_output(safe_expr, output_file)
 
@@ -93,7 +117,13 @@ def run_agent_unified(
         "certified_remaining_bits": (res["certificate"].remaining_noise_budget_bits
                                      if res["certificate"] is not None else None),
         "input_expression": expr, "safe_expression": safe_expr,
+        "pipeline": "separated" if separated else "joint",
     }
+    if separated:
+        st1_ops, st1_keys = _get_split_costs(res1["safe_expr"])
+        record.update({"stage1_ops": st1_ops, "stage1_keys": st1_keys,
+                       "stage1_noise_est": res1["safe_noise"],
+                       "stage1_safety_activated": res1["safety_activated"]})
     print(f"[unified run] w={preference} budget={budget}: ops {ops0}->{safe_ops}, keys {keys0}->{safe_keys}, "
           f"noise est {res['initial_noise']:.1f}->{res['safe_noise']:.1f}, "
           f"rollback={'ON' if res['safety_activated'] else 'off'}, certified={res['certified']}", flush=True)

@@ -54,7 +54,8 @@ EXEC_METRICS = {   # line prefix printed by the generated main.cpp -> CSV column
 RL_FIELDS = ["initial_ops", "initial_keys", "initial_noise_est", "agent_ops", "agent_keys",
              "agent_noise_est", "agent_violated", "safe_ops", "safe_keys", "safe_noise_est",
              "safety_activated", "best_valid_step", "rl_steps", "rl_time_ms",
-             "certified", "certified_remaining_bits"]
+             "certified", "certified_remaining_bits",
+             "pipeline", "stage1_ops", "stage1_keys", "stage1_noise_est", "stage1_safety_activated"]
 COLUMNS = (["benchmark", "slot_count", "w_ops", "w_keys", "budget", "status"] + OPERATIONS
            + ["Depth", "Multiplicative Depth", "compile_time (s)"] + list(EXEC_METRICS.values())
            + ["exec_runs", "outputs_match"] + RL_FIELDS)
@@ -223,6 +224,9 @@ def last_rl_record(log_path, n_before):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", required=True, help="unified joint agent .zip (ignored with --framework original)")
+    ap.add_argument("--model-stage2", default=os.environ.get("FHE_E2E_MODEL_STAGE2") or None,
+                    help="separated pipeline: Stage 2 (rotations) model .zip; --model is then the "
+                         "Stage 1 (ops) model. Default: $FHE_E2E_MODEL_STAGE2 (joint pipeline if unset)")
     ap.add_argument("--framework", default=os.environ.get("FHE_E2E_FRAMEWORK", "unified"),
                     choices=["unified", "original"],
                     help="agent the compiler calls: the unified joint agent, or the original CHEHAB RL "
@@ -249,6 +253,9 @@ def main():
     model = str(Path(args.model).resolve())
     if args.framework == "unified" and not Path(model).is_file():
         sys.exit(f"Model not found: {model}")
+    model2 = str(Path(args.model_stage2).resolve()) if args.model_stage2 else ""
+    if model2 and (args.framework != "unified" or not Path(model2).is_file()):
+        sys.exit(f"Stage 2 model not found or not with --framework unified: {model2}")
 
     tag = f"b{args.budget}_{os.environ.get('SLURM_JOB_ID', 'local')}"
     work = REPO / (args.work_dir or f"e2e_{tag}")
@@ -258,6 +265,7 @@ def main():
     env = dict(os.environ)
     env.update({
         "FHE_RL_MODEL": model,
+        "FHE_RL_MODEL_STAGE2": model2,   # empty: joint pipeline
         "FHE_RL_BUDGET": str(args.budget),
         "FHE_RL_TRAIN_BUDGETS": args.train_budgets,
         "FHE_RL_CONSTRAINT": "noise",
@@ -283,6 +291,8 @@ def main():
             sizes = [int(s) for s in args.slots.split(",")] if args.slots else SUITE[bench]
             points += [(bench, s, None) for s in sizes]
 
+    if model2:
+        log(f"Separated pipeline | Stage 1 (ops) {model} | Stage 2 (rotations) {model2}")
     log(f"Framework {args.framework} | Model {model if args.framework == 'unified' else 'agent_model (config.py)'} | budget {args.budget} | {len(points)} benchmark configs x {len(prefs)} preferences")
     log(f"Work dir {work} | output {out}")
     t_start = time.perf_counter()

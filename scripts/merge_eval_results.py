@@ -127,9 +127,14 @@ def e2e_front_metrics(ok):
     return pd.DataFrame(rows)
 
 
-def merge_e2e(folder):
-    """Real compile + SEAL runs (e2e_<benchmarks>_b<budget>_<jobid>.csv) -> e2e_ALL.xlsx."""
-    files = sorted(f for f in Path(folder).glob("e2e_*_b*_*.csv") if not f.name.startswith("e2e_original_"))
+def merge_e2e(folder, separated=False):
+    """Real compile + SEAL runs (e2e_<benchmarks>_b<budget>_<jobid>.csv) -> e2e_ALL.xlsx.
+    separated=True: separated pipeline (e2e_sep_*.csv) -> e2e_separated_ALL.xlsx."""
+    if separated:
+        files = sorted(Path(folder).glob("e2e_sep_*_b*_*.csv"))
+    else:
+        files = sorted(f for f in Path(folder).glob("e2e_*_b*_*.csv")
+                       if not f.name.startswith(("e2e_original_", "e2e_sep_")))
     if not files:
         return
     df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
@@ -153,7 +158,7 @@ def merge_e2e(folder):
             rows.append(r)
         return pd.DataFrame(rows)
 
-    out = Path(folder) / "e2e_ALL.xlsx"
+    out = Path(folder) / ("e2e_separated_ALL.xlsx" if separated else "e2e_ALL.xlsx")
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         df.sort_values(["budget", "benchmark", "w_ops"], ascending=[True, True, False]).to_excel(
             writer, sheet_name="all_runs", index=False)
@@ -196,4 +201,5 @@ if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "RL/test_results"
     main(target)
     merge_e2e(target)
+    merge_e2e(target, separated=True)
     merge_e2e_original(target)

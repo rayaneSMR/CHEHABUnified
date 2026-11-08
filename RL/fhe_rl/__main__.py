@@ -706,6 +706,8 @@ def main(args=None):
                 constraint_metric=os.environ.get("FHE_RL_CONSTRAINT", "noise"),
                 constraint_method=os.environ.get("FHE_RL_METHOD", "nato_sc"),
                 log_file=os.environ.get("FHE_RL_RUN_LOG"),
+                # Separated pipeline: FHE_RL_MODEL is Stage 1 (ops), this is Stage 2 (rotations)
+                model_stage2_filepath=os.environ.get("FHE_RL_MODEL_STAGE2") or None,
             )
         else:
             agent_zip = get_model_path("agent_model")

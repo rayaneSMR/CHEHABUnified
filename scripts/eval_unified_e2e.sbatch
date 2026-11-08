@@ -16,6 +16,10 @@
 # preference; agent_model in RL/fhe_rl/config.py): set FHE_E2E_FRAMEWORK=original. MODEL,
 # BUDGET and the preference are then ignored by the agent; pass one preference to run each
 # benchmark once. Output: RL/test_results/e2e_original_<benchmarks>_<jobid>.csv
+#
+# Separated pipeline (Stage 1 ops agent -> Stage 2 rotations agent): MODEL is the Stage 1
+# model and FHE_E2E_MODEL_STAGE2 the Stage 2 model (absolute path).
+# Output: RL/test_results/e2e_sep_<benchmarks>_b<budget>_<jobid>.csv
 
 #SBATCH -p compute
 #SBATCH --mem 32GB
@@ -82,8 +86,13 @@ fi
 TAG="$(echo "$BENCHMARKS" | tr ',' '-')"
 JOB="${SLURM_JOB_ID:-local}"
 FRAMEWORK="${FHE_E2E_FRAMEWORK:-unified}"
+MODEL2="${FHE_E2E_MODEL_STAGE2:-}"
+STAGE2_ARGS=()
 if [ "$FRAMEWORK" = "original" ]; then
     OUT="RL/test_results/e2e_original_${TAG}_${JOB}.csv"
+elif [ -n "$MODEL2" ]; then
+    OUT="RL/test_results/e2e_sep_${TAG}_b${BUDGET}_${JOB}.csv"
+    STAGE2_ARGS=(--model-stage2 "$MODEL2")
 else
     OUT="RL/test_results/e2e_${TAG}_b${BUDGET}_${JOB}.csv"
 fi
@@ -94,6 +103,7 @@ echo "════════════════════════�
 echo "  UNIFIED AGENT: REAL COMPILE + SEAL EXECUTION"
 echo "  Framework:   $FRAMEWORK"
 echo "  Model:       $MODEL"
+[ -n "$MODEL2" ] && echo "  Stage 2:     $MODEL2 (separated pipeline)"
 echo "  Benchmarks:  $BENCHMARKS"
 echo "  Budget:      $BUDGET bits"
 echo "  Python:      $PYTHON"
@@ -106,6 +116,7 @@ echo "════════════════════════�
 python -u scripts/run_benchmarks_unified.py \
     --framework "$FRAMEWORK" \
     --model "$MODEL" \
+    ${STAGE2_ARGS[@]+"${STAGE2_ARGS[@]}"} \
     --budget "$BUDGET" \
     --benchmarks "$BENCHMARKS" \
     ${PREF_ARGS[@]+"${PREF_ARGS[@]}"} \
