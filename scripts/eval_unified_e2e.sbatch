@@ -20,6 +20,11 @@
 # Separated pipeline (Stage 1 ops agent -> Stage 2 rotations agent): MODEL is the Stage 1
 # model and FHE_E2E_MODEL_STAGE2 the Stage 2 model (absolute path).
 # Output: RL/test_results/e2e_sep_<benchmarks>_b<budget>_<jobid>.csv
+#
+# Optional environment (sbatch --export=ALL,...):
+#   METHOD=nato_sc|margin_barrier|noise_masking|none  constraint method of the agent (default nato_sc)
+#   ROLLBACK=0      compile the agent's final program (no rollback; the SEAL bound still applies)
+#   OUT_DIR=<dir>   folder for the CSV (default RL/test_results)
 
 #SBATCH -p compute
 #SBATCH --mem 32GB
@@ -88,13 +93,19 @@ JOB="${SLURM_JOB_ID:-local}"
 FRAMEWORK="${FHE_E2E_FRAMEWORK:-unified}"
 MODEL2="${FHE_E2E_MODEL_STAGE2:-}"
 STAGE2_ARGS=()
+OUT_DIR="${OUT_DIR:-RL/test_results}"
+mkdir -p "$OUT_DIR"
+METHOD="${METHOD:-nato_sc}"
+ROLLBACK="${ROLLBACK:-1}"
+STAGE2_ARGS+=(--method "$METHOD")
+[ "$ROLLBACK" = "0" ] && STAGE2_ARGS+=(--no-rollback)
 if [ "$FRAMEWORK" = "original" ]; then
-    OUT="RL/test_results/e2e_original_${TAG}_${JOB}.csv"
+    OUT="$OUT_DIR/e2e_original_${TAG}_${JOB}.csv"
 elif [ -n "$MODEL2" ]; then
-    OUT="RL/test_results/e2e_sep_${TAG}_b${BUDGET}_${JOB}.csv"
-    STAGE2_ARGS=(--model-stage2 "$MODEL2")
+    OUT="$OUT_DIR/e2e_sep_${TAG}_b${BUDGET}_${JOB}.csv"
+    STAGE2_ARGS+=(--model-stage2 "$MODEL2")
 else
-    OUT="RL/test_results/e2e_${TAG}_b${BUDGET}_${JOB}.csv"
+    OUT="$OUT_DIR/e2e_${TAG}_b${BUDGET}_${JOB}.csv"
 fi
 PREF_ARGS=()
 [ -n "$PREFERENCES" ] && PREF_ARGS=(--prefs "$PREFERENCES")
@@ -104,6 +115,7 @@ echo "  UNIFIED AGENT: REAL COMPILE + SEAL EXECUTION"
 echo "  Framework:   $FRAMEWORK"
 echo "  Model:       $MODEL"
 [ -n "$MODEL2" ] && echo "  Stage 2:     $MODEL2 (separated pipeline)"
+echo "  Method:      $METHOD   rollback: $([ "$ROLLBACK" = "0" ] && echo off || echo on)"
 echo "  Benchmarks:  $BENCHMARKS"
 echo "  Budget:      $BUDGET bits"
 echo "  Python:      $PYTHON"

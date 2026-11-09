@@ -281,9 +281,13 @@ def _run_single_episode(
     constraint_metric: str = "mem",
     preference_vector=None,
     agent_budget=None,
+    rollback=True,
 ):
     # agent_budget: budget given to the agent, when it differs from the one the rollback
     # checks (e.g. 9000000 for an unconstrained run, rolled back at the real budget).
+    # rollback=False: return the agent's final program (no estimator check, no earlier
+    # checkpoint). The SEAL bound still applies: if it does not certify the final program,
+    # the input is returned, as when no checkpoint is certified with rollback.
     t0 = time.perf_counter()
     opts = {"budget": budget if agent_budget is None else agent_budget, "expression": expr_str}
     if preference_vector is not None:
@@ -338,7 +342,10 @@ def _run_single_episode(
     #   With a preference w (MORL / unified): lowest w_ops*ops/ops0 + w_keys*keys/max(keys0, 1),
     #   so the rollback keeps the trade-off asked for (at w=[1,0] this is the lowest ops cost).
     #   Without a preference (constrained): lowest cost, as before.
-    valid_checkpoints = [cp for cp in checkpoints if cp["noise"] <= budget]
+    if rollback:
+        valid_checkpoints = [cp for cp in checkpoints if cp["noise"] <= budget]
+    else:
+        valid_checkpoints = [agent_final]
     if preference_vector is not None:
         ops0, keys0 = _get_split_costs(test_expr)
         def _score(cp):

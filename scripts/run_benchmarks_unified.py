@@ -55,7 +55,8 @@ RL_FIELDS = ["initial_ops", "initial_keys", "initial_noise_est", "agent_ops", "a
              "agent_noise_est", "agent_violated", "safe_ops", "safe_keys", "safe_noise_est",
              "safety_activated", "best_valid_step", "rl_steps", "rl_time_ms",
              "certified", "certified_remaining_bits",
-             "pipeline", "stage1_ops", "stage1_keys", "stage1_noise_est", "stage1_safety_activated"]
+             "pipeline", "stage1_ops", "stage1_keys", "stage1_noise_est", "stage1_safety_activated",
+             "rollback", "method"]
 COLUMNS = (["benchmark", "slot_count", "w_ops", "w_keys", "budget", "status"] + OPERATIONS
            + ["Depth", "Multiplicative Depth", "compile_time (s)"] + list(EXEC_METRICS.values())
            + ["exec_runs", "outputs_match"] + RL_FIELDS)
@@ -227,6 +228,13 @@ def main():
     ap.add_argument("--model-stage2", default=os.environ.get("FHE_E2E_MODEL_STAGE2") or None,
                     help="separated pipeline: Stage 2 (rotations) model .zip; --model is then the "
                          "Stage 1 (ops) model. Default: $FHE_E2E_MODEL_STAGE2 (joint pipeline if unset)")
+    ap.add_argument("--no-rollback", action="store_true",
+                    default=os.environ.get("FHE_E2E_ROLLBACK", "1") == "0",
+                    help="compile the agent's final program instead of the rollback's choice "
+                         "(the SEAL bound still applies). Default: off, or $FHE_E2E_ROLLBACK=0")
+    ap.add_argument("--method", default=os.environ.get("FHE_E2E_METHOD", "nato_sc"),
+                    choices=["nato_sc", "margin_barrier", "noise_masking", "none"],
+                    help="constraint method the agent was trained with (default: nato_sc)")
     ap.add_argument("--framework", default=os.environ.get("FHE_E2E_FRAMEWORK", "unified"),
                     choices=["unified", "original"],
                     help="agent the compiler calls: the unified joint agent, or the original CHEHAB RL "
@@ -269,7 +277,8 @@ def main():
         "FHE_RL_BUDGET": str(args.budget),
         "FHE_RL_TRAIN_BUDGETS": args.train_budgets,
         "FHE_RL_CONSTRAINT": "noise",
-        "FHE_RL_METHOD": "nato_sc",
+        "FHE_RL_METHOD": args.method,
+        "FHE_RL_ROLLBACK": "0" if args.no_rollback else "1",
         "FHE_RL_RUN_LOG": str(rl_log),
         "PYTHON": env.get("PYTHON") or sys.executable,   # otherwise the compiler may pick /usr/bin/python3
         "PYTHONPATH": f"{REPO / 'RL'}:{REPO / 'RL' / 'pytrs'}:{env.get('PYTHONPATH', '')}",
@@ -291,6 +300,7 @@ def main():
             sizes = [int(s) for s in args.slots.split(",")] if args.slots else SUITE[bench]
             points += [(bench, s, None) for s in sizes]
 
+    log(f"Method {args.method} | rollback {'off' if args.no_rollback else 'on'}")
     if model2:
         log(f"Separated pipeline | Stage 1 (ops) {model} | Stage 2 (rotations) {model2}")
     log(f"Framework {args.framework} | Model {model if args.framework == 'unified' else 'agent_model (config.py)'} | budget {args.budget} | {len(points)} benchmark configs x {len(prefs)} preferences")
