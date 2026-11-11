@@ -1,3 +1,4 @@
+
 #!/bin/bash
 # Build the CHEHAB compiler and the C++ benchmark programs used by the real compile +
 # SEAL execution evaluation (scripts/run_benchmarks_unified.py). Run once per clone,
@@ -19,7 +20,7 @@ unset CXX CC CXXFLAGS CFLAGS CPPFLAGS LDFLAGS
 echo "Compiler: $SYSTEM_GXX ($("$SYSTEM_GXX" --version | head -1))"
 
 BENCHES=(box_blur gx_kernel gy_kernel roberts_cross matrix_mul dot_product hamming_dist
-         l2_distance lin_reg poly_reg max sort polynomials_coyote)
+         l2_distance lin_reg poly_reg max sort polynomials_coyote threshold_expr)
 
 # The benchmark CMake files copy their he/ templates into <repo>/build/..., so the
 # build folder must be called build/.

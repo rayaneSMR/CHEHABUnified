@@ -25,6 +25,8 @@
 #   METHOD=nato_sc|margin_barrier|noise_masking|none  constraint method of the agent (default nato_sc)
 #   ROLLBACK=0      compile the agent's final program (no rollback; the SEAL bound still applies)
 #   OUT_DIR=<dir>   folder for the CSV (default RL/test_results)
+#   LINES=1-20      benchmark "threshold" (near-threshold dataset): dataset lines to run
+#   PASSTHROUGH=1   no agent: compile and run the input program (baseline execution time)
 
 #SBATCH -p compute
 #SBATCH --mem 32GB
@@ -99,6 +101,10 @@ METHOD="${METHOD:-nato_sc}"
 ROLLBACK="${ROLLBACK:-1}"
 STAGE2_ARGS+=(--method "$METHOD")
 [ "$ROLLBACK" = "0" ] && STAGE2_ARGS+=(--no-rollback)
+LINES="${LINES:-}"
+PASSTHROUGH="${PASSTHROUGH:-0}"
+[ -n "$LINES" ] && STAGE2_ARGS+=(--lines "$LINES") && TAG="${TAG}_L${LINES//,/_}"
+[ "$PASSTHROUGH" = "1" ] && STAGE2_ARGS+=(--passthrough) && TAG="${TAG}_input"
 if [ "$FRAMEWORK" = "original" ]; then
     OUT="$OUT_DIR/e2e_original_${TAG}_${JOB}.csv"
 elif [ -n "$MODEL2" ]; then

@@ -55,7 +55,36 @@ def run_agent_unified(
     if not expressions:
         print("No valid expressions found in the file.")
         sys.exit(1)
-    expr = expressions[0]
+    compiler_expr = expressions[0]
+    # FHE_RL_INPUT_EXPRESSION: run on this expression instead of the compiler's, e.g. a dataset
+    # program whose noise the compiler's front-end rewrites would change. It must be equivalent
+    # to the compiler's (same inputs, outputs in the same order).
+    override = os.environ.get("FHE_RL_INPUT_EXPRESSION", "").strip()
+    expr = override.split(":")[0].strip() if override else compiler_expr
+
+    # FHE_RL_PASSTHROUGH=1: no agent, the compiler gets the input program back (baseline).
+    if os.environ.get("FHE_RL_PASSTHROUGH", "0") == "1":
+        from pytrs import NoiseEstimator
+        from .test import _get_split_costs
+        _write_compiler_output(expr, output_file)
+        ops0, keys0 = _get_split_costs(expr)
+        noise0 = float(NoiseEstimator().estimate(parse_sexpr(expr)))
+        record = {
+            "w_ops": preference[0], "w_keys": preference[1], "budget": budget,
+            "initial_ops": ops0, "initial_keys": keys0, "initial_noise_est": noise0,
+            "agent_ops": ops0, "agent_keys": keys0, "agent_noise_est": noise0,
+            "agent_violated": noise0 > budget,
+            "safe_ops": ops0, "safe_keys": keys0, "safe_noise_est": noise0,
+            "safety_activated": False, "best_valid_step": 0, "rl_steps": 0, "rl_time_ms": 0.0,
+            "input_expression": expr, "safe_expression": expr,
+            "compiler_expression": compiler_expr, "input_overridden": bool(override),
+            "pipeline": "passthrough", "rollback": False, "method": "none",
+        }
+        print(f"[unified run] passthrough: ops {ops0}, keys {keys0}, noise est {noise0:.1f}", flush=True)
+        if log_file:
+            with open(log_file, "a") as f:
+                f.write(json.dumps(record) + "\n")
+        return record
 
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     rules_p = "rules.txt" if os.path.exists("rules.txt") else os.path.join(here, "rules.txt")
@@ -121,6 +150,7 @@ def run_agent_unified(
         "certified_remaining_bits": (res["certificate"].remaining_noise_budget_bits
                                      if res["certificate"] is not None else None),
         "input_expression": expr, "safe_expression": safe_expr,
+        "compiler_expression": compiler_expr, "input_overridden": bool(override),
         "pipeline": "separated" if separated else "joint",
         "rollback": rollback, "method": constraint_method,
     }

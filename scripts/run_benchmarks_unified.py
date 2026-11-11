@@ -40,6 +40,10 @@ SUITE = {
 POLY = "polynomials_coyote"
 POLY_CONFIGS = [(regime, depth) for regime in ("50-50", "100-50", "100-100") for depth in (5, 10)]
 POLY_INSTANCE = 1
+# Near-threshold dataset: one program per line, compiled by benchmarks/threshold_expr
+THRESH = "threshold"
+THRESH_BIN = "threshold_expr"
+THRESH_DATASET = REPO / "RL" / "fhe_rl" / "datasets" / "threshold_benchmarks.txt"
 OPERATIONS = ["add", "sub", "multiply_plain", "rotate_rows", "negate", "multiply"]
 PREFS = [[round(1.0 - i / 10, 1), round(i / 10, 1)] for i in range(10)]   # generate_pref_list(11)
 
@@ -56,8 +60,8 @@ RL_FIELDS = ["initial_ops", "initial_keys", "initial_noise_est", "agent_ops", "a
              "safety_activated", "best_valid_step", "rl_steps", "rl_time_ms",
              "certified", "certified_remaining_bits",
              "pipeline", "stage1_ops", "stage1_keys", "stage1_noise_est", "stage1_safety_activated",
-             "rollback", "method"]
-COLUMNS = (["benchmark", "slot_count", "w_ops", "w_keys", "budget", "status"] + OPERATIONS
+             "rollback", "method", "input_overridden", "compiler_input_matches"]
+COLUMNS = (["benchmark", "dataset_line", "slot_count", "w_ops", "w_keys", "budget", "status"] + OPERATIONS
            + ["Depth", "Multiplicative Depth", "compile_time (s)"] + list(EXEC_METRICS.values())
            + ["exec_runs", "outputs_match"] + RL_FIELDS)
 
@@ -68,7 +72,7 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def prepare_work_dir(work, benches):
+def prepare_work_dir(work, benches, dataset=THRESH_DATASET):
     """Copy the built benchmarks into <work>/benchmarks (one level below the repo root,
     so the compiler still finds RL/ at ../../../RL)."""
     if work.parent.resolve() != REPO.resolve():
@@ -85,6 +89,8 @@ def prepare_work_dir(work, benches):
         gen = REPO / "benchmarks" / bench / f"generate_{bench}.py"
         if gen.is_file():
             shutil.copy2(gen, dst / gen.name)
+        if bench == THRESH_BIN:
+            shutil.copy2(dataset, dst / THRESH_DATASET.name)   # the binary reads this name
     assert (work / "benchmarks" / benches[0] / ".." / ".." / ".." / "RL").resolve() == (REPO / "RL").resolve()
 
 
@@ -95,7 +101,9 @@ def run(cmd, cwd, env=None, timeout=None):
 
 def compile_point(bench, bdir, slot, w_ops, env, timeout, poly_cfg=None, framework="unified"):
     """Compile once with the RL vectorizer. Returns (ok, compile_s, depth, mult_depth, output)."""
-    if poly_cfg:
+    if bench == THRESH_BIN:
+        cmd = [f"./{bench}", "1", str(slot), framework, "1", "0", "1", "1", "1", "0", str(w_ops)]
+    elif poly_cfg:
         regime, depth = poly_cfg
         cmd = [f"./{bench}", str(depth), str(POLY_INSTANCE), regime, "1", framework, "1", "0", "1", "0", "1", "0", str(w_ops)]
     else:
@@ -244,6 +252,16 @@ def main():
     ap.add_argument("--benchmarks", default="all",
                     help=f"comma-separated subset of {list(SUITE) + [POLY]} (default: all)")
     ap.add_argument("--slots", default=None, help="override the sizes, e.g. '4,8'")
+    ap.add_argument("--lines", default=None,
+                    help=f"benchmark '{THRESH}': dataset lines (1-based), e.g. '1-20' or '1,5,7' (default: all)")
+    ap.add_argument("--dataset", default=str(THRESH_DATASET),
+                    help="benchmark 'threshold': the dataset (default: RL/fhe_rl/datasets/threshold_benchmarks.txt)")
+    ap.add_argument("--passthrough", action="store_true",
+                    default=os.environ.get("FHE_E2E_PASSTHROUGH", "0") == "1",
+                    help="no agent: compile and run the input program (baseline). Default: $FHE_E2E_PASSTHROUGH=1")
+    ap.add_argument("--no-input-override", action="store_true",
+                    help="benchmark 'threshold': give the agent the compiler's expression instead of the "
+                         "dataset expression (the compiler's front-end may rewrite it and change its noise)")
     ap.add_argument("--prefs", default=None, help="'w_ops,w_keys;...' (default: the 10 training preferences)")
     ap.add_argument("--exec_repeats", type=int, default=3, help="runs of the SEAL program; the first is a warm-up")
     ap.add_argument("--compile_timeout", type=int, default=7200)
@@ -254,12 +272,12 @@ def main():
     args = ap.parse_args()
 
     benches = list(SUITE) + [POLY] if args.benchmarks == "all" else [b.strip() for b in args.benchmarks.split(",")]
-    unknown = [b for b in benches if b not in SUITE and b != POLY]
+    unknown = [b for b in benches if b not in SUITE and b not in (POLY, THRESH)]
     if unknown:
         sys.exit(f"Unknown benchmarks: {unknown}")
     prefs = ([[float(x) for x in p.split(",")] for p in args.prefs.split(";")] if args.prefs else PREFS)
     model = str(Path(args.model).resolve())
-    if args.framework == "unified" and not Path(model).is_file():
+    if args.framework == "unified" and not args.passthrough and not Path(model).is_file():
         sys.exit(f"Model not found: {model}")
     model2 = str(Path(args.model_stage2).resolve()) if args.model_stage2 else ""
     if model2 and (args.framework != "unified" or not Path(model2).is_file()):
@@ -267,7 +285,21 @@ def main():
 
     tag = f"b{args.budget}_{os.environ.get('SLURM_JOB_ID', 'local')}"
     work = REPO / (args.work_dir or f"e2e_{tag}")
-    prepare_work_dir(work, benches)
+    dataset_path = Path(args.dataset).resolve()
+    dataset = []
+    if THRESH in benches:
+        dataset = [l.strip() for l in dataset_path.read_text().splitlines()]
+        if args.lines:
+            sel = []
+            for part in args.lines.split(","):
+                a, _, b = part.partition("-")
+                sel += list(range(int(a), int(b or a) + 1))
+        else:
+            sel = list(range(1, len(dataset) + 1))
+        bad = [i for i in sel if not 1 <= i <= len(dataset) or not dataset[i - 1]]
+        if bad:
+            sys.exit(f"Dataset lines out of range or empty: {bad}")
+    prepare_work_dir(work, [THRESH_BIN if b == THRESH else b for b in benches], dataset_path)
     rl_log = work / "rl_log.jsonl"
 
     env = dict(os.environ)
@@ -279,6 +311,7 @@ def main():
         "FHE_RL_CONSTRAINT": "noise",
         "FHE_RL_METHOD": args.method,
         "FHE_RL_ROLLBACK": "0" if args.no_rollback else "1",
+        "FHE_RL_PASSTHROUGH": "1" if args.passthrough else "0",
         "FHE_RL_RUN_LOG": str(rl_log),
         "PYTHON": env.get("PYTHON") or sys.executable,   # otherwise the compiler may pick /usr/bin/python3
         "PYTHONPATH": f"{REPO / 'RL'}:{REPO / 'RL' / 'pytrs'}:{env.get('PYTHONPATH', '')}",
@@ -294,13 +327,16 @@ def main():
 
     points = []
     for bench in benches:
-        if bench == POLY:
+        if bench == THRESH:
+            points += [(THRESH_BIN, i, None) for i in sel]
+        elif bench == POLY:
             points += [(bench, None, cfg) for cfg in POLY_CONFIGS]
         else:
             sizes = [int(s) for s in args.slots.split(",")] if args.slots else SUITE[bench]
             points += [(bench, s, None) for s in sizes]
 
-    log(f"Method {args.method} | rollback {'off' if args.no_rollback else 'on'}")
+    log(f"Method {args.method} | rollback {'off' if args.no_rollback else 'on'}"
+        + (" | PASSTHROUGH (input program, no agent)" if args.passthrough else ""))
     if model2:
         log(f"Separated pipeline | Stage 1 (ops) {model} | Stage 2 (rotations) {model2}")
     log(f"Framework {args.framework} | Model {model if args.framework == 'unified' else 'agent_model (config.py)'} | budget {args.budget} | {len(points)} benchmark configs x {len(prefs)} preferences")
@@ -308,16 +344,30 @@ def main():
     t_start = time.perf_counter()
     for bench, slot, poly_cfg in points:
         bdir = work / "benchmarks" / bench
-        name = f"tree_{poly_cfg[0]}_{poly_cfg[1]}_{POLY_INSTANCE}" if poly_cfg else f"{bench}_{slot}"
+        point_env = env
+        if bench == THRESH_BIN:
+            # slot = dataset line; the agent gets the dataset expression itself
+            ds_expr, _, ds_name = dataset[slot - 1].rpartition(":")
+            name = f"L{slot:02d}_{ds_name}"
+            if not args.no_input_override:
+                point_env = dict(env, FHE_RL_INPUT_EXPRESSION=ds_expr)
+        else:
+            name = f"tree_{poly_cfg[0]}_{poly_cfg[1]}_{POLY_INSTANCE}" if poly_cfg else f"{bench}_{slot}"
         for w_ops, w_keys in prefs:
-            row = {"benchmark": name, "slot_count": slot, "w_ops": w_ops, "w_keys": w_keys, "budget": args.budget}
+            row = {"benchmark": name, "slot_count": None if bench == THRESH_BIN else slot,
+                   "dataset_line": slot if bench == THRESH_BIN else None,
+                   "w_ops": w_ops, "w_keys": w_keys, "budget": args.budget}
             n_before = len(rl_log.read_text().splitlines()) if rl_log.exists() else 0
             try:
                 ok, compile_s, depth, mdepth, cout = compile_point(
-                    bench, bdir, slot, w_ops, env, args.compile_timeout, poly_cfg, args.framework)
+                    bench, bdir, slot, w_ops, point_env, args.compile_timeout, poly_cfg, args.framework)
             except subprocess.TimeoutExpired:
                 ok, cout = False, "compile-timeout"
-            row.update(last_rl_record(rl_log, n_before))
+            rec = last_rl_record(rl_log, n_before)
+            if rec.get("compiler_expression") is not None:
+                norm = lambda e: " ".join(e.replace("(", " ( ").replace(")", " ) ").split())
+                rec["compiler_input_matches"] = norm(rec["compiler_expression"]) == norm(rec.get("input_expression", ""))
+            row.update(rec)
             if not ok:
                 row["status"] = "compile-failed" if cout != "compile-timeout" else "compile-timeout"
                 log(f"{name} w={w_ops}: {row['status']}\n{cout[-1500:]}")
