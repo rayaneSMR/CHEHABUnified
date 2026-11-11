@@ -15,11 +15,11 @@ constraint mechanisms, with and without safety rollback, compiled and executed w
   checkpoint). The SEAL noise bound still applies: if it does not certify the final program, the
   input is compiled. All six agents.
 - **rollback/:** best checkpoint within the budget according to the noise estimator that is also
-  certified by the SEAL bound, as in `e2e_certified_2026-11-07`. The four constrained alternatives;
-  the rollback runs of CMO-RL are in `e2e_certified_2026-11-07`, and the unconstrained agent has no rollback.
+  certified by the SEAL bound, as in `e2e_certified_2026-11-07`. The four constrained alternatives
+  and the unconstrained agent (`METHOD=none`); the rollback runs of CMO-RL are in `e2e_certified_2026-11-07`.
 - **Bound:** corrected SEAL bound of `f4a48116` (N = 16384, t = 786433, q = BFVDefault(16384)).
 - **Code:** branch `unified-ram-film` at `a55e5fb8`. Jobs 19294958-19295453 (no_rollback),
-  19297325-19297566 (rollback).
+  19297325-19297566 (rollback), and a later batch for `rollback/unconstrained`.
 
 ## Files
 
